@@ -96,28 +96,6 @@ def _center(text: str) -> int:
     return (_W - _LCD.textWidth(text)) // 2
 
 
-def _pct(value, cap) -> int:
-    try:
-        value = int(value or 0)
-        cap = int(cap or 0)
-    except Exception:
-        return 0
-    if cap <= 0:
-        return 0
-    return max(0, min(100, int(value * 100 / cap)))
-
-
-def _fmt_num(value) -> str:
-    try:
-        return "{:,}".format(int(value or 0)).replace(",", "'")
-    except Exception:
-        return "0"
-
-
-def _budget_line(value, cap, suffix: str) -> str:
-    return "{} / {} {}".format(_fmt_num(value), _fmt_num(cap), suffix)
-
-
 class BuddyUI:
     """240x135 view. Mirrors the Basic's BuddyUI API so the protocol
     and app layers don't care which display is underneath."""
@@ -135,8 +113,6 @@ class BuddyUI:
         self._prompt = None
         self._identity_name = "Buddy"
         self._identity_owner = ""
-        self._stats = {}
-        self._battery = {}
         _LCD.fillScreen(BLACK)
         # setFont is sticky across setTextSize calls, so we pick
         # DejaVu9 once at init. Wrapped in try/except so a future
@@ -205,14 +181,12 @@ class BuddyUI:
         self._identity_name = name or "Buddy"
         self._identity_owner = owner or ""
         if self._connection_state not in ("advertising", "disconnected"):
-            self._draw_main()
+            self._draw_identity()
 
     def update_footer(self, stats: dict, battery: dict):
-        self._stats = stats or {}
-        self._battery = battery or {}
         # Stats footer only appears during the connected layout.
         if self._connection_state not in ("advertising", "disconnected"):
-            self._draw_main()
+            self._draw_footer(stats, battery)
 
     def flash_decision(self, decision: str):
         color = GREEN if decision == "once" else RED
@@ -360,123 +334,37 @@ class BuddyUI:
         _LCD.drawString("and pick this one", 6, 84)
 
     def _draw_connected_main(self):
-        _LCD.fillRect(0, 0, _W, 111, BLACK)
-        self._draw_dashboard_header()
+        self._draw_identity()
         hb = self._last
         _LCD.setTextSize(1)
         running = hb.get("running", 0)
         waiting = hb.get("waiting", 0)
         total = hb.get("total", 0)
+        _LCD.setTextColor(WHITE, BLACK)
+        queue = "Q: {}run {}wait {}tot".format(running, waiting, total)
+        # Clip to screen width so large numbers don't wrap.
+        while _LCD.textWidth(queue) > _W - 12 and len(queue) > 1:
+            queue = queue[:-1]
+        _LCD.drawString(queue, 6, 42)
         tokens_today = hb.get("tokens_today", 0)
-        daily_cap = hb.get("tokens_daily_cap", hb.get("daily_token_cap", 200000))
-        self._draw_usage_row(
-            y=27,
-            pct=_pct(tokens_today, daily_cap),
-            fill=ORANGE,
-            label="Current",
-            detail=_budget_line(tokens_today, daily_cap, "daily cap"),
-        )
-
-        tokens_turn = hb.get("tokens", 0)
-        entries = hb.get("entries", 0)
-        second_value = tokens_turn if tokens_turn else entries
-        second_cap = hb.get("tokens_turn_cap", hb.get("turn_token_cap", 50000))
-        if not tokens_turn:
-            second_cap = max(total, 1)
-        self._draw_usage_row(
-            y=69,
-            pct=_pct(second_value, second_cap),
-            fill=CYAN,
-            label="Today",
-            detail=_budget_line(second_value, second_cap, "session"),
-        )
+        _LCD.setTextColor(CYAN, BLACK)
+        tok = "{:,}".format(tokens_today).replace(",", "'")
+        tok_line = "Today: " + tok + " tok"
+        while _LCD.textWidth(tok_line) > _W - 12 and len(tok_line) > 1:
+            tok_line = tok_line[:-1]
+        _LCD.drawString(tok_line, 6, 58)
         # When a prompt is active the prompt box takes over the lower
         # third of the panel — skip the generic msg line so they don't
         # overlap. When no prompt is pending, msg fills the same row.
         if self._prompt:
-            self._draw_prompt_box_compact(self._prompt)
+            self._draw_prompt_box(self._prompt)
         else:
             msg = hb.get("msg", "")
-            if not msg:
-                msg = "Q:{} run {} wait {} total".format(running, waiting, total)
-            _LCD.setTextColor(GRAY_MID, BLACK)
-            while _LCD.textWidth(msg) > _W - 12 and len(msg) > 1:
-                msg = msg[:-1]
-            _LCD.drawString(msg, 6, 98)
-
-    def _draw_dashboard_header(self):
-        _LCD.fillRect(0, 0, _W, 24, DARK)
-        self._draw_avatar(8, 7, ORANGE)
-        name = self._identity_name or "Usage"
-        if name == "Buddy":
-            name = "Usage"
-        while _LCD.textWidth(name) > 110 and len(name) > 1:
-            name = name[:-1]
-        _LCD.setTextSize(1)
-        _LCD.setTextColor(CREAM, DARK)
-        _LCD.drawString(name, _center(name), 7)
-        self._draw_battery_icon(206, 7)
-        _LCD.fillRect(0, 24, _W, 1, GRAY_DIM)
-
-    def _draw_avatar(self, x: int, y: int, color: int):
-        pixels = (
-            "00100100",
-            "01111110",
-            "11011011",
-            "11111111",
-            "10111101",
-        )
-        for row, bits in enumerate(pixels):
-            for col, bit in enumerate(bits):
-                if bit == "1":
-                    _LCD.fillRect(x + col * 2, y + row * 2, 2, 2, color)
-
-    def _draw_battery_icon(self, x: int, y: int):
-        try:
-            pct = int(self._battery.get("pct", 100))
-        except Exception:
-            pct = 100
-        pct = max(0, min(100, pct))
-        _LCD.drawRect(x, y, 21, 10, CREAM)
-        _LCD.fillRect(x + 22, y + 3, 2, 4, CREAM)
-        fill_w = max(1, int(17 * pct / 100))
-        color = GREEN if pct > 25 else YELLOW if pct > 10 else RED
-        _LCD.fillRect(x + 2, y + 2, fill_w, 6, color)
-
-    def _draw_usage_row(self, y: int, pct: int, fill: int, label: str, detail: str):
-        _LCD.setTextSize(1)
-        pct_text = "{}%".format(pct)
-        _LCD.setTextColor(WHITE, BLACK)
-        _LCD.drawString(pct_text, 6, y)
-
-        pill_w = max(36, _LCD.textWidth(label) + 12)
-        pill_x = _W - pill_w - 8
-        try:
-            _LCD.fillRoundRect(pill_x, y - 1, pill_w, 14, 3, GRAY_DIM)
-        except Exception:
-            _LCD.fillRect(pill_x, y - 1, pill_w, 14, GRAY_DIM)
-        _LCD.setTextColor(WHITE, GRAY_DIM)
-        _LCD.drawString(label, pill_x + 6, y + 1)
-
-        bar_x = 6
-        bar_y = y + 18
-        bar_w = _W - 16
-        _LCD.fillRect(bar_x, bar_y, bar_w, 6, GRAY_DIM)
-        _LCD.fillRect(bar_x, bar_y, int(bar_w * pct / 100), 6, fill)
-
-        _LCD.setTextColor(GRAY_MID, BLACK)
-        while _LCD.textWidth(detail) > _W - 12 and len(detail) > 1:
-            detail = detail[:-1]
-        _LCD.drawString(detail, 6, bar_y + 12)
-
-    def _draw_prompt_box_compact(self, prompt: dict):
-        _LCD.drawRect(4, 94, _W - 8, 16, ORANGE)
-        _LCD.setTextSize(1)
-        _LCD.setTextColor(ORANGE, BLACK)
-        text = "PERM: " + prompt.get("tool", "?")
-        while _LCD.textWidth(text) > _W - 16 and len(text) > 1:
-            text = text[:-1]
-        _LCD.drawString(text, 8, 98)
+            if msg:
+                _LCD.setTextColor(GRAY_MID, BLACK)
+                while _LCD.textWidth(msg) > _W - 12 and len(msg) > 1:
+                    msg = msg[:-1]
+                _LCD.drawString(msg, 6, 74)
 
     def _draw_prompt_box(self, prompt: dict):
         # Orange-bordered box for the pending permission. y=74..109
