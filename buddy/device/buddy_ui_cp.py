@@ -79,6 +79,10 @@ GREEN = 0x00FF00
 CYAN = 0x00FFFF
 YELLOW = 0xFFFF00
 RED = 0xFF0000
+PANEL_BG = 0xF0EEE6
+PANEL_LINE = 0x777777
+PANEL_BAR = 0xD9D6CC
+PANEL_TEXT = 0x111111
 
 _LCD = M5.Lcd
 
@@ -94,6 +98,75 @@ def _right(y: int, pad: int, text: str) -> int:
 def _center(text: str) -> int:
     """Cursor X to horizontally center `text` in the viewport."""
     return (_W - _LCD.textWidth(text)) // 2
+
+
+def _pct(value, cap=100) -> int:
+    try:
+        value = int(value or 0)
+        cap = int(cap or 0)
+    except Exception:
+        return 0
+    if cap <= 0:
+        return max(0, min(100, value))
+    return max(0, min(100, int(value * 100 / cap)))
+
+
+def _duration_text(seconds, fallback="--") -> str:
+    try:
+        seconds = int(seconds)
+    except Exception:
+        return fallback
+    if seconds <= 0:
+        return fallback
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours:
+        return "{} HR {} MIN".format(hours, minutes)
+    return "{} MIN".format(minutes)
+
+
+GPT_ICON = (
+    "0",
+    "00000011111",
+    "00000111111111",
+    "000011001111111",
+    "0011110111000011",
+    "0111111100111001",
+    "0110111111101111",
+    "0110101111110111",
+    "01101111001111011",
+    "01101111001111011",
+    "00111011111101011",
+    "00111101111111011",
+    "00100111001111111",
+    "0011000011101111",
+    "00011111110011",
+    "0000111111111",
+    "000000011111",
+    "0",
+)
+
+
+CLAUDE_ICON = (
+    "0",
+    "00000110001",
+    "00000110011",
+    "000001110110111",
+    "001110110110111",
+    "00111111111111",
+    "0001111111111",
+    "00000111111111111",
+    "01111111111111111",
+    "0111111111111111",
+    "00000011111111111",
+    "0000111111111001",
+    "00011111111111",
+    "000101101101111",
+    "0000011011011",
+    "0000010011001",
+    "000000001",
+    "0",
+)
 
 
 class BuddyUI:
@@ -113,6 +186,7 @@ class BuddyUI:
         self._prompt = None
         self._identity_name = "Buddy"
         self._identity_owner = ""
+        self._battery = {}
         _LCD.fillScreen(BLACK)
         # setFont is sticky across setTextSize calls, so we pick
         # DejaVu9 once at init. Wrapped in try/except so a future
@@ -181,12 +255,13 @@ class BuddyUI:
         self._identity_name = name or "Buddy"
         self._identity_owner = owner or ""
         if self._connection_state not in ("advertising", "disconnected"):
-            self._draw_identity()
+            self._draw_main()
 
     def update_footer(self, stats: dict, battery: dict):
+        self._battery = battery or {}
         # Stats footer only appears during the connected layout.
         if self._connection_state not in ("advertising", "disconnected"):
-            self._draw_footer(stats, battery)
+            self._draw_main()
 
     def flash_decision(self, decision: str):
         color = GREEN if decision == "once" else RED
@@ -221,6 +296,14 @@ class BuddyUI:
             still gets feedback; the menu staying visible is what
             makes the toast's meaning obvious.
         """
+        if (
+            self._connection_state not in ("advertising", "disconnected")
+            and not self._prompt
+            and self._passkey is None
+            and not self._unpair_prompt
+        ):
+            _LCD.fillRect(0, 111, _W, _H - 111, BLACK)
+            return
         # Thin orange hairline above the strip + DARK fill.
         _LCD.fillRect(0, 111, _W, 1, ORANGE)
         _LCD.fillRect(0, 112, _W, _H - 112, DARK)
@@ -334,37 +417,98 @@ class BuddyUI:
         _LCD.drawString("and pick this one", 6, 84)
 
     def _draw_connected_main(self):
-        self._draw_identity()
+        _LCD.fillRect(0, 0, _W, 111, BLACK)
         hb = self._last
-        _LCD.setTextSize(1)
-        running = hb.get("running", 0)
-        waiting = hb.get("waiting", 0)
-        total = hb.get("total", 0)
-        _LCD.setTextColor(WHITE, BLACK)
-        queue = "Q: {}run {}wait {}tot".format(running, waiting, total)
-        # Clip to screen width so large numbers don't wrap.
-        while _LCD.textWidth(queue) > _W - 12 and len(queue) > 1:
-            queue = queue[:-1]
-        _LCD.drawString(queue, 6, 42)
-        tokens_today = hb.get("tokens_today", 0)
-        _LCD.setTextColor(CYAN, BLACK)
-        tok = "{:,}".format(tokens_today).replace(",", "'")
-        tok_line = "Today: " + tok + " tok"
-        while _LCD.textWidth(tok_line) > _W - 12 and len(tok_line) > 1:
-            tok_line = tok_line[:-1]
-        _LCD.drawString(tok_line, 6, 58)
-        # When a prompt is active the prompt box takes over the lower
-        # third of the panel — skip the generic msg line so they don't
-        # overlap. When no prompt is pending, msg fills the same row.
+        self._draw_usage_card(4, 8, "CLAUDE", CLAUDE_ICON, ORANGE, hb, "claude")
+        self._draw_usage_card(122, 8, "CODEX", GPT_ICON, PANEL_TEXT, hb, "codex")
         if self._prompt:
-            self._draw_prompt_box(self._prompt)
-        else:
-            msg = hb.get("msg", "")
-            if msg:
-                _LCD.setTextColor(GRAY_MID, BLACK)
-                while _LCD.textWidth(msg) > _W - 12 and len(msg) > 1:
-                    msg = msg[:-1]
-                _LCD.drawString(msg, 6, 74)
+            self._draw_prompt_box_compact(self._prompt)
+
+    def _draw_usage_card(self, x: int, y: int, title: str, icon, accent: int, hb: dict, prefix: str):
+        w = 114
+        h = 98
+        _LCD.fillRect(x, y, w, h, PANEL_BG)
+        _LCD.drawRect(x, y, w, h, PANEL_LINE)
+
+        self._draw_icon(icon, x + 8, y + 5, accent)
+        _LCD.setTextSize(1)
+        _LCD.setTextColor(PANEL_TEXT, PANEL_BG)
+        _LCD.drawString(title, x + (w - _LCD.textWidth(title)) // 2, y + 8)
+        self._draw_battery_icon(x + w - 25, y + 7, PANEL_BG)
+
+        p5 = self._usage_pct(hb, prefix, "5h")
+        r5 = self._usage_reset(hb, prefix, "5h", "IN 4 HR 1 MIN" if prefix == "claude" else "IN 2 HR 47 MIN")
+        self._draw_usage_row(x + 7, y + 27, w - 14, "5H", p5, accent, r5)
+
+        p7 = self._usage_pct(hb, prefix, "7d")
+        r7 = self._usage_reset(hb, prefix, "7d", "TUE 9:00 AM" if prefix == "claude" else "MON 12:00 AM")
+        self._draw_usage_row(x + 7, y + 62, w - 14, "7D", p7, accent, r7)
+
+    def _usage_pct(self, hb: dict, prefix: str, window: str) -> int:
+        key = "{}_{}_pct".format(prefix, window)
+        if key in hb:
+            return _pct(hb.get(key))
+        if prefix == "claude" and window == "5h":
+            return _pct(hb.get("tokens_today", 0), hb.get("tokens_daily_cap", 200000))
+        if prefix == "codex" and window == "5h":
+            return _pct(hb.get("tokens", 0), hb.get("tokens_turn_cap", 50000))
+        return 0
+
+    def _usage_reset(self, hb: dict, prefix: str, window: str, fallback: str) -> str:
+        text_key = "{}_{}_reset".format(prefix, window)
+        seconds_key = "{}_{}_reset_s".format(prefix, window)
+        if text_key in hb:
+            return str(hb.get(text_key) or "--").upper()
+        if seconds_key in hb:
+            return "IN " + _duration_text(hb.get(seconds_key), "--")
+        return fallback
+
+    def _draw_usage_row(self, x: int, y: int, w: int, label: str, pct: int, fill: int, reset: str):
+        _LCD.setTextSize(2)
+        _LCD.setTextColor(PANEL_TEXT, PANEL_BG)
+        _LCD.drawString(label, x, y)
+        _LCD.setTextSize(1)
+        used = "{}% USED".format(pct)
+        _LCD.drawString(used, x + w - _LCD.textWidth(used), y + 5)
+
+        bar_y = y + 22
+        _LCD.fillRect(x, bar_y, w, 5, PANEL_BAR)
+        fill_w = int(w * pct / 100)
+        if fill_w > 0:
+            _LCD.fillRect(x, bar_y, fill_w, 5, fill)
+
+        text = "RESETS " + reset
+        _LCD.setTextColor(GRAY_MID, PANEL_BG)
+        while _LCD.textWidth(text) > w and len(text) > 1:
+            text = text[:-1]
+        _LCD.drawString(text, x, y + 30)
+
+    def _draw_icon(self, rows, x: int, y: int, color: int):
+        for row, bits in enumerate(rows):
+            for col, bit in enumerate(bits):
+                if bit == "1":
+                    _LCD.fillRect(x + col, y + row, 1, 1, color)
+
+    def _draw_battery_icon(self, x: int, y: int, bg: int):
+        try:
+            pct = int(self._battery.get("pct", 95))
+        except Exception:
+            pct = 95
+        pct = max(0, min(100, pct))
+        _LCD.drawRect(x, y, 18, 9, PANEL_TEXT)
+        _LCD.fillRect(x + 19, y + 3, 2, 3, PANEL_TEXT)
+        _LCD.fillRect(x + 2, y + 2, 14, 5, bg)
+        fill_w = max(1, int(14 * pct / 100))
+        _LCD.fillRect(x + 2, y + 2, fill_w, 5, PANEL_TEXT)
+
+    def _draw_prompt_box_compact(self, prompt: dict):
+        _LCD.drawRect(3, 94, _W - 6, 17, ORANGE)
+        _LCD.setTextSize(1)
+        _LCD.setTextColor(ORANGE, BLACK)
+        text = "PERM: " + prompt.get("tool", "?")
+        while _LCD.textWidth(text) > _W - 14 and len(text) > 1:
+            text = text[:-1]
+        _LCD.drawString(text, 7, 98)
 
     def _draw_prompt_box(self, prompt: dict):
         # Orange-bordered box for the pending permission. y=74..109
