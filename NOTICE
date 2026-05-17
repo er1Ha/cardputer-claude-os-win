@@ -1,0 +1,14 @@
+m5stack
+Copyright 2026 MAS Event + Design, LLC
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product bundles one third-party Python package in
+`onboard/scripts/vendor/`: pyserial 3.5, BSD-3-Clause licensed. See
+LICENSE-THIRD-PARTY.md for details.
+
+esptool (required at runtime by the flash stage) is GPLv2+ and is
+intentionally NOT bundled with this repository. It is declared as a
+pip dependency in requirements.txt and the skill's preflight
+auto-installs it on first run if missing. This keeps the repository
+itself cleanly Apache-2.0-compatible.

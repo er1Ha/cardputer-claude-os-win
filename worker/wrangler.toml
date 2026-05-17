@@ -1,0 +1,53 @@
+name = "push-to-claude"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+# ---- Push-to-Claude (single-turn chat memory) -------------------------
+# Last ~8 messages per device-secret kept here with a 24h TTL so
+# follow-up questions retain context.
+#
+# REPLACE the id below with your own. Create one with:
+#   wrangler kv namespace create HISTORY
+[[kv_namespaces]]
+binding = "HISTORY"
+id = "REPLACE_WITH_YOUR_HISTORY_KV_ID"
+
+# ---- Pager + Console index --------------------------------------------
+# Per-device session list, agent/env IDs, and daily spawn counts. Small,
+# infrequently written. Create with:
+#   wrangler kv namespace create INDEX
+[[kv_namespaces]]
+binding = "INDEX"
+id = "REPLACE_WITH_YOUR_INDEX_KV_ID"
+
+# ---- SessionRouter Durable Object -------------------------------------
+# One DO per Anthropic session_id. Mirrors the event log, holds the
+# summary blob, and serves the Pager (poll) + Console (SSE) surfaces.
+# Migration is required on first deploy.
+[[durable_objects.bindings]]
+name = "SESSION_ROUTER"
+class_name = "SessionRouter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionRouter"]
+
+# ---- Bundler rules ----------------------------------------------------
+# console.html is imported as a string by console_routes.js so we can
+# ship the entire UI inside the Worker bundle (no separate static
+# hosting required).
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+# ---- Vars (non-secret) ------------------------------------------------
+# Per-device daily cap on new agent sessions, a cheap fork-bomb guard.
+[vars]
+PAGER_DAILY_SPAWN_CAP = "30"
+
+# ---- Secrets (set via `wrangler secret put`, not committed) -----------
+# DEVICE_SECRET        — auth for Pager + Console + Push-to-Claude
+# ANTHROPIC_API_KEY    — used for both Haiku chat and Managed Agents
+# OPENAI_API_KEY       — Whisper for Push-to-Claude (optional if you
+#                        don't use the voice app)

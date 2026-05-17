@@ -1,0 +1,1714 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Claude Central</title>
+    <style>
+      /* ---- design tokens ----------------------------------------------- */
+      :root {
+        --bg: #0e0e0d;
+        --bg-elev: #161614;
+        --bg-elev2: #1f1f1c;
+        --line: #2a2a26;
+        --text: #f0eee6;
+        --muted: #8a877d;
+        --dim: #5a584f;
+        --orange: #cc785c;
+        --orange-2: #e89a82;
+        --green: #6ea85f;
+        --red: #cf5b56;
+        --yellow: #d6b85c;
+        --blue: #6e9bcf;
+        --mono:
+          ui-monospace, SFMono-Regular, "SF Mono", Menlo, "JetBrains Mono",
+          "Roboto Mono", Consolas, "Liberation Mono", monospace;
+        --sans:
+          -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto,
+          sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+        color: inherit;
+      }
+      a {
+        color: var(--orange-2);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      code {
+        font-family: var(--mono);
+      }
+
+      /* ---- header ------------------------------------------------------ */
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 14px;
+        background: var(--bg-elev);
+        border-bottom: 1px solid var(--line);
+        flex: 0 0 auto;
+      }
+      header .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--sans);
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      header .brand .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--orange);
+        display: inline-block;
+      }
+      header .spacer {
+        flex: 1;
+      }
+      header .conn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      header .conn .pip {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--dim);
+      }
+      header .conn.live .pip {
+        background: var(--green);
+        box-shadow: 0 0 8px var(--green);
+      }
+      header .conn.error .pip {
+        background: var(--red);
+      }
+      header .conn.connecting .pip {
+        background: var(--yellow);
+        animation: pulse 1.2s infinite;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.4;
+        }
+      }
+      header .logout {
+        background: none;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        padding: 4px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      header .logout:hover {
+        color: var(--text);
+        border-color: var(--dim);
+      }
+
+      /* ---- layout ------------------------------------------------------ */
+      main {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+      }
+      .rail {
+        width: 280px;
+        flex: 0 0 auto;
+        background: var(--bg-elev);
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .rail .rail-head {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .rail .rail-head h2 {
+        margin: 0;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        flex: 1;
+      }
+      .rail .rail-head button {
+        background: var(--orange);
+        color: #1a1a18;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .rail .rail-head button:hover {
+        background: var(--orange-2);
+      }
+      .rail .session-list {
+        flex: 1;
+        overflow-y: auto;
+      }
+      .session-row {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        border-left: 3px solid transparent;
+      }
+      .session-row:hover {
+        background: var(--bg-elev2);
+      }
+      .session-row.active {
+        background: var(--bg-elev2);
+        border-left-color: var(--orange);
+      }
+      .session-row .row-1 {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .session-row .title {
+        flex: 1;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .session-row .status {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 3px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .status.running {
+        background: rgba(110, 168, 95, 0.18);
+        color: var(--green);
+      }
+      .status.idle {
+        background: rgba(138, 135, 125, 0.18);
+        color: var(--muted);
+      }
+      .status.terminated {
+        background: rgba(207, 91, 86, 0.18);
+        color: var(--red);
+      }
+      .status.rescheduling {
+        background: rgba(214, 184, 92, 0.18);
+        color: var(--yellow);
+      }
+      .session-row .row-2 {
+        font-size: 11px;
+        color: var(--muted);
+        display: flex;
+        gap: 8px;
+      }
+      .session-row .row-2 .age {
+        flex: 1;
+      }
+      .session-row .row-3 {
+        font-size: 11px;
+        color: var(--dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* ---- main pane --------------------------------------------------- */
+      .pane {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+      }
+      .pane-head {
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 0 0 auto;
+      }
+      .pane-head .title-input {
+        flex: 1;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 600;
+        padding: 4px 0;
+      }
+      .pane-head .title-input:focus {
+        border-bottom: 1px solid var(--dim);
+      }
+      .pane-head .stats {
+        color: var(--muted);
+        font-size: 12px;
+        display: flex;
+        gap: 12px;
+      }
+      .pane-head .stats span b {
+        color: var(--text);
+        font-weight: 500;
+      }
+      .pane-head .actions {
+        display: flex;
+        gap: 6px;
+      }
+      .pane-head .actions button {
+        background: var(--bg-elev2);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .pane-head .actions button:hover {
+        border-color: var(--dim);
+        background: #25251f;
+      }
+      .pane-head .actions button.danger:hover {
+        color: var(--red);
+        border-color: var(--red);
+      }
+
+      .events {
+        flex: 1;
+        overflow-y: auto;
+        padding: 14px 16px 60px;
+        scroll-behavior: smooth;
+      }
+      .events .empty {
+        color: var(--muted);
+        padding: 40px;
+        text-align: center;
+      }
+      .ev {
+        margin-bottom: 10px;
+      }
+      .ev .meta {
+        color: var(--dim);
+        font-size: 11px;
+        margin-bottom: 2px;
+        user-select: none;
+      }
+      .ev .meta b {
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      .ev.agent-message .body {
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-word;
+        padding: 6px 10px;
+        border-left: 2px solid var(--orange);
+        background: rgba(204, 120, 92, 0.05);
+      }
+
+      .ev.agent-thinking .body {
+        color: var(--muted);
+        font-style: italic;
+        padding: 4px 10px;
+        border-left: 2px solid var(--dim);
+      }
+
+      .ev.tool-use details {
+        background: var(--bg-elev);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0;
+      }
+      .ev.tool-use summary {
+        padding: 6px 10px;
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text);
+      }
+      .ev.tool-use summary::-webkit-details-marker {
+        display: none;
+      }
+      .ev.tool-use summary .marker {
+        color: var(--muted);
+      }
+      .ev.tool-use summary .tname {
+        color: var(--blue);
+        font-weight: 500;
+      }
+      .ev.tool-use summary .tsum {
+        color: var(--muted);
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+      }
+      .ev.tool-use .tbody {
+        padding: 8px 10px;
+        border-top: 1px solid var(--line);
+      }
+      .ev.tool-use .tbody pre {
+        margin: 0;
+        padding: 6px 8px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 12px;
+        border-radius: 3px;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .ev.tool-use .tbody pre.bash::before {
+        content: "$ ";
+        color: var(--green);
+      }
+      .ev.tool-use .tbody .field {
+        margin-top: 6px;
+      }
+      .ev.tool-use .tbody .field b {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-bottom: 2px;
+        font-weight: 500;
+      }
+
+      .ev.tool-result details {
+        background: var(--bg-elev);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+      }
+      .ev.tool-result summary {
+        padding: 4px 10px;
+        cursor: pointer;
+        list-style: none;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .ev.tool-result summary::-webkit-details-marker {
+        display: none;
+      }
+      .ev.tool-result summary .marker {
+        color: var(--dim);
+      }
+      .ev.tool-result.error summary {
+        color: var(--red);
+      }
+      .ev.tool-result .rbody {
+        padding: 6px 10px;
+        border-top: 1px solid var(--line);
+        max-height: 320px;
+        overflow-y: auto;
+      }
+      .ev.tool-result .rbody pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .diff {
+        font-size: 12px;
+        line-height: 1.5;
+        background: var(--bg);
+        border-radius: 3px;
+        padding: 6px 8px;
+      }
+      .diff .del {
+        color: var(--red);
+        display: block;
+      }
+      .diff .add {
+        color: var(--green);
+        display: block;
+      }
+
+      .ev.status .body {
+        color: var(--muted);
+        font-size: 12px;
+        padding: 2px 0;
+        border-top: 1px dashed var(--line);
+        border-bottom: 1px dashed var(--line);
+        text-align: center;
+        margin: 6px 0;
+      }
+      .ev.status.running .body {
+        color: var(--green);
+      }
+      .ev.status.idle .body {
+        color: var(--orange);
+      }
+      .ev.status.terminated .body {
+        color: var(--red);
+      }
+      .ev.status.error .body {
+        color: var(--red);
+      }
+
+      .composer-wrap {
+        border-top: 1px solid var(--line);
+        background: var(--bg-elev);
+        flex: 0 0 auto;
+      }
+      .files-strip {
+        display: flex;
+        gap: 6px;
+        padding: 6px 12px;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+        min-height: 26px;
+        align-items: center;
+      }
+      .files-strip:empty::before {
+        content: "no artifacts yet";
+        color: var(--dim);
+        font-size: 11px;
+        padding: 4px 0;
+      }
+      .file-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 11px;
+        color: var(--text);
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .file-pill:hover {
+        border-color: var(--orange);
+        color: var(--orange-2);
+      }
+      .file-pill .fsize {
+        color: var(--muted);
+      }
+
+      .composer {
+        padding: 8px 12px;
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .composer textarea {
+        flex: 1;
+        min-height: 36px;
+        max-height: 160px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        padding: 8px 10px;
+        resize: vertical;
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      .composer textarea:focus {
+        outline: none;
+        border-color: var(--orange);
+      }
+      .composer .pending {
+        font-size: 11px;
+        color: var(--yellow);
+        align-self: center;
+        padding: 0 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .composer .pending button {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 1px 6px;
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .composer .pending button:hover {
+        border-color: var(--yellow);
+        color: var(--yellow);
+      }
+      .composer button {
+        background: var(--orange);
+        color: #1a1a18;
+        border: none;
+        border-radius: 4px;
+        padding: 8px 14px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .composer button:hover {
+        background: var(--orange-2);
+      }
+      .composer button.secondary {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--line);
+        font-weight: 500;
+      }
+      .composer button.secondary:hover {
+        border-color: var(--orange);
+        color: var(--orange-2);
+      }
+      .composer button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .composer .interrupt {
+        background: var(--red);
+        color: #1a1a18;
+      }
+      .composer .interrupt:hover {
+        background: #d7726d;
+      }
+
+      .modal-back {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      }
+      .modal-back.open {
+        display: flex;
+      }
+      .modal {
+        background: var(--bg-elev);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 18px;
+        min-width: 420px;
+        max-width: 600px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      }
+      .modal h2 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        font-family: var(--sans);
+      }
+      .modal label {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin: 8px 0 4px;
+      }
+      .modal input,
+      .modal textarea,
+      .modal select {
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        padding: 8px 10px;
+      }
+      .modal textarea {
+        min-height: 100px;
+        resize: vertical;
+        font-family: var(--mono);
+      }
+      .modal .row {
+        display: flex;
+        gap: 8px;
+      }
+      .modal .row > * {
+        flex: 1;
+      }
+      .modal .actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 14px;
+      }
+      .modal .actions button {
+        background: var(--orange);
+        color: #1a1a18;
+        border: none;
+        border-radius: 4px;
+        padding: 8px 16px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .modal .actions button.cancel {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--line);
+        font-weight: 500;
+      }
+      .modal .err {
+        color: var(--red);
+        font-size: 12px;
+        margin-top: 8px;
+        min-height: 16px;
+      }
+
+      .toast {
+        position: fixed;
+        bottom: 16px;
+        right: 16px;
+        background: var(--bg-elev2);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--orange);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        max-width: 320px;
+        opacity: 0;
+        transition: opacity 200ms;
+        pointer-events: none;
+      }
+      .toast.show {
+        opacity: 1;
+      }
+      .toast.error {
+        border-left-color: var(--red);
+      }
+      .toast.ok {
+        border-left-color: var(--green);
+      }
+
+      .scroll-bottom-btn {
+        position: absolute;
+        right: 24px;
+        bottom: 92px;
+        background: var(--bg-elev2);
+        border: 1px solid var(--line);
+        color: var(--text);
+        padding: 4px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+        font-size: 12px;
+        display: none;
+      }
+      .scroll-bottom-btn.show {
+        display: block;
+      }
+
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--bg);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--bg-elev2);
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="dot"></span><span>Claude Central</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="conn" id="conn">
+        <span class="pip"></span><span id="conn-text">disconnected</span>
+      </div>
+      <button class="logout" id="logout-btn" title="Forget token">
+        sign out
+      </button>
+    </header>
+
+    <main>
+      <aside class="rail">
+        <div class="rail-head">
+          <h2>Sessions</h2>
+          <button id="new-btn" title="New task (n)">+ New</button>
+        </div>
+        <div class="session-list" id="session-list"></div>
+      </aside>
+
+      <section class="pane" id="pane" style="position: relative">
+        <div class="pane-head" id="pane-head" style="display: none">
+          <input class="title-input" id="title-input" placeholder="untitled" />
+          <div class="stats" id="stats"></div>
+          <div class="actions">
+            <button id="files-btn" title="Refresh files">files</button>
+            <button id="rename-btn" title="Save title">save</button>
+            <button class="danger" id="delete-btn" title="Delete session">
+              delete
+            </button>
+          </div>
+        </div>
+        <div class="events" id="events">
+          <div class="empty" id="empty">
+            Select a session on the left, or hit <b>+ New</b> to fire one off.
+          </div>
+        </div>
+        <button class="scroll-bottom-btn" id="scroll-bottom-btn">
+          ↓ jump to bottom
+        </button>
+        <div class="composer-wrap" id="composer-wrap" style="display: none">
+          <div class="files-strip" id="files-strip"></div>
+          <div class="composer">
+            <textarea
+              id="reply-input"
+              placeholder="Send a follow-up message…   ⌘/Ctrl-Enter to send"
+            ></textarea>
+            <span
+              class="pending"
+              id="pending-confirm"
+              style="display: none"
+            ></span>
+            <button
+              class="secondary interrupt"
+              id="interrupt-btn"
+              title="Stop agent"
+            >
+              ⏸ interrupt
+            </button>
+            <button id="send-btn" title="Send (⌘/Ctrl-Enter)">send</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="modal-back" id="auth-modal">
+      <div class="modal">
+        <h2>Enter device secret</h2>
+        <p style="color: var(--muted); font-size: 12px; margin: 0 0 8px">
+          Same value as your Cardputer's <code>DEVICE_SECRET</code>. Stored in
+          this browser's localStorage; never sent anywhere except your Worker.
+        </p>
+        <input type="password" id="auth-input" autocomplete="off" autofocus />
+        <div class="actions">
+          <button id="auth-submit">unlock</button>
+        </div>
+        <div class="err" id="auth-err"></div>
+      </div>
+    </div>
+
+    <div class="modal-back" id="spawn-modal">
+      <div class="modal">
+        <h2>Fire off a new agent session</h2>
+        <label>Title (optional — derived from prompt if blank)</label>
+        <input
+          type="text"
+          id="spawn-title"
+          placeholder="e.g. bump deps in repo X"
+          maxlength="72"
+        />
+        <div class="row">
+          <div>
+            <label>Kind</label>
+            <select id="spawn-kind">
+              <option value="task">task</option>
+              <option value="research">research</option>
+              <option value="chore">chore</option>
+              <option value="briefing">briefing</option>
+            </select>
+          </div>
+        </div>
+        <label>Prompt</label>
+        <textarea
+          id="spawn-prompt"
+          placeholder="Describe the task. The agent has bash, file ops, and web search.&#10;Save artifacts into /workspace/out/ — they sync to your Mac."
+        ></textarea>
+        <div class="actions">
+          <button class="cancel" id="spawn-cancel">cancel</button>
+          <button id="spawn-go">launch</button>
+        </div>
+        <div class="err" id="spawn-err"></div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+      "use strict";
+
+      // ---- safe DOM helpers --------------------------------------------------
+      //
+      // We never use innerHTML with anything user-derived. Instead, h() builds
+      // elements explicitly and child strings always go through textContent /
+      // createTextNode. This makes the whole script XSS-proof by construction.
+
+      const qs = (sel) => document.querySelector(sel);
+
+      function h(tag, attrs, ...children) {
+        const e = document.createElement(tag);
+        if (attrs) {
+          for (const [k, v] of Object.entries(attrs)) {
+            if (v == null || v === false) continue;
+            if (k === "class") e.className = v;
+            else if (k === "text") e.textContent = v;
+            else if (k === "html") {
+              // explicit opt-in for trusted, hard-coded markup. Never used
+              // with user input — call sites grep clean.
+              e.innerHTML = v; // eslint-disable-line no-restricted-properties
+            } else if (k.startsWith("on") && typeof v === "function") {
+              e.addEventListener(k.slice(2).toLowerCase(), v);
+            } else if (k in e && typeof e[k] !== "object" && k !== "type") {
+              try {
+                e[k] = v;
+              } catch {
+                e.setAttribute(k, v);
+              }
+            } else {
+              e.setAttribute(k, v);
+            }
+          }
+        }
+        for (const c of children) {
+          if (c == null || c === false) continue;
+          if (Array.isArray(c)) c.forEach((cc) => append(e, cc));
+          else append(e, c);
+        }
+        return e;
+      }
+      function append(parent, child) {
+        if (typeof child === "string" || typeof child === "number") {
+          parent.appendChild(document.createTextNode(String(child)));
+        } else if (child instanceof Node) {
+          parent.appendChild(child);
+        }
+      }
+      function clear(node) {
+        while (node.firstChild) node.removeChild(node.firstChild);
+      }
+
+      // ---- formatters --------------------------------------------------------
+
+      function fmtAge(iso) {
+        if (!iso) return "";
+        const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+        if (s < 60) return s + "s";
+        if (s < 3600) return Math.floor(s / 60) + "m";
+        if (s < 86400) return Math.floor(s / 3600) + "h";
+        return Math.floor(s / 86400) + "d";
+      }
+      function fmtSize(n) {
+        if (n == null) return "";
+        if (n < 1024) return n + "B";
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + "K";
+        return (n / 1024 / 1024).toFixed(1) + "M";
+      }
+      function fmtTokens(usage) {
+        if (!usage) return "—";
+        const it = usage.input_tokens || 0;
+        const ot = usage.output_tokens || 0;
+        // Rough ballpark using public Opus pricing — a hint, not a bill.
+        const dollars = (it * 0.000015 + ot * 0.000075).toFixed(2);
+        return `${(it + ot).toLocaleString()}t · ~$${dollars}`;
+      }
+      // stop_reason can be a string ("end_turn") or an object
+      // ({type: "end_turn"}) depending on the API path; flatten to a
+      // displayable string either way.
+      function stopReasonStr(sr) {
+        if (sr == null) return "";
+        if (typeof sr === "string") return sr;
+        if (typeof sr === "object" && typeof sr.type === "string")
+          return sr.type;
+        try {
+          return JSON.stringify(sr);
+        } catch {
+          return String(sr);
+        }
+      }
+      function toast(msg, kind) {
+        const t = qs("#toast");
+        t.className = "toast show" + (kind ? " " + kind : "");
+        t.textContent = msg;
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => t.classList.remove("show"), 3000);
+      }
+
+      // ---- auth gate ---------------------------------------------------------
+
+      const TOKEN_KEY = "claude-central:token";
+      let token = localStorage.getItem(TOKEN_KEY) || "";
+
+      function showAuth() {
+        qs("#auth-modal").classList.add("open");
+        qs("#auth-input").value = token;
+        qs("#auth-input").focus();
+        qs("#auth-input").select();
+      }
+      async function tryAuth(t) {
+        const r = await fetch(
+          `/console/sessions?token=${encodeURIComponent(t)}`,
+        );
+        if (!r.ok) {
+          qs("#auth-err").textContent =
+            r.status === 401
+              ? "rejected — wrong secret?"
+              : `worker error ${r.status}`;
+          return false;
+        }
+        return true;
+      }
+      async function unlock() {
+        const t = qs("#auth-input").value.trim();
+        if (!t) {
+          qs("#auth-err").textContent = "enter a secret";
+          return;
+        }
+        qs("#auth-err").textContent = "";
+        if (!(await tryAuth(t))) return;
+        token = t;
+        localStorage.setItem(TOKEN_KEY, t);
+        qs("#auth-modal").classList.remove("open");
+        await refreshSessions();
+      }
+      function logout() {
+        localStorage.removeItem(TOKEN_KEY);
+        token = "";
+        if (state.eventSource) state.eventSource.close();
+        showAuth();
+      }
+      qs("#auth-submit").addEventListener("click", unlock);
+      qs("#auth-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") unlock();
+      });
+      qs("#logout-btn").addEventListener("click", logout);
+
+      // ---- API ---------------------------------------------------------------
+
+      async function api(path, opts = {}) {
+        const sep = path.includes("?") ? "&" : "?";
+        const url = path + sep + "token=" + encodeURIComponent(token);
+        const init = {
+          method: opts.method || "GET",
+          headers: { "content-type": "application/json" },
+        };
+        if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+        const r = await fetch(url, init);
+        if (r.status === 401) {
+          showAuth();
+          throw new Error("unauthorized");
+        }
+        if (!r.ok) {
+          let body = null;
+          try {
+            body = await r.json();
+          } catch {}
+          const msg = body?.message || body?.error || `${r.status}`;
+          const err = new Error(msg);
+          err.body = body;
+          err.status = r.status;
+          throw err;
+        }
+        return r.json();
+      }
+
+      // ---- state -------------------------------------------------------------
+
+      const state = {
+        sessions: [],
+        selectedId: null,
+        events: [],
+        meta: null,
+        summary: null,
+        eventSource: null,
+        files: [],
+      };
+
+      // ---- session list ------------------------------------------------------
+
+      function renderSessions() {
+        const list = qs("#session-list");
+        clear(list);
+        if (state.sessions.length === 0) {
+          list.appendChild(
+            h("div", {
+              class: "empty",
+              style:
+                "padding:24px; color:var(--muted); font-size:12px; text-align:center",
+              text: "no sessions yet",
+            }),
+          );
+          return;
+        }
+        const sorted = [...state.sessions].sort((a, b) => {
+          const ar = a.summary?.status === "running" ? 1 : 0;
+          const br = b.summary?.status === "running" ? 1 : 0;
+          if (ar !== br) return br - ar;
+          const at =
+            a.summary?.lastEventTs || new Date(a.createdAt || 0).getTime();
+          const bt =
+            b.summary?.lastEventTs || new Date(b.createdAt || 0).getTime();
+          return bt - at;
+        });
+        for (const s of sorted) {
+          const status = s.summary?.status || "idle";
+          const lastTool = s.summary?.lastTool;
+          const subline = lastTool
+            ? `${lastTool.name}${lastTool.summary ? " · " + lastTool.summary : ""}`
+            : s.summary?.lastText || "—";
+          const row = h(
+            "div",
+            {
+              class:
+                "session-row" +
+                (s.session_id === state.selectedId ? " active" : ""),
+              onclick: () => selectSession(s.session_id),
+            },
+            h(
+              "div",
+              { class: "row-1" },
+              h("span", {
+                class: "title",
+                text: s.title || s.session_id.slice(0, 12),
+              }),
+              h("span", { class: "status " + status, text: status }),
+            ),
+            h(
+              "div",
+              { class: "row-2" },
+              h("span", { class: "age", text: fmtAge(s.createdAt) + " ago" }),
+              h("span", { text: fmtTokens(s.summary?.usage) }),
+            ),
+            h("div", { class: "row-3", text: subline }),
+          );
+          list.appendChild(row);
+        }
+      }
+
+      // ---- event rendering ---------------------------------------------------
+
+      function renderEvent(ev) {
+        const meta = h(
+          "div",
+          { class: "meta" },
+          h("b", { text: ev.payload?.type || ev.type }),
+          " · " + new Date(ev.ts).toLocaleTimeString(),
+        );
+        const body = bodyFor(ev);
+        return h("div", { class: "ev " + classFor(ev) }, meta, body);
+      }
+
+      function classFor(ev) {
+        const t = ev.type;
+        if (t === "agent.message") return "agent-message";
+        if (t === "agent.thinking") return "agent-thinking";
+        if (
+          t === "agent.tool_use" ||
+          t === "agent.mcp_tool_use" ||
+          t === "agent.custom_tool_use"
+        )
+          return "tool-use";
+        if (t === "agent.tool_result" || t === "agent.mcp_tool_result") {
+          return "tool-result" + (ev.payload?.is_error ? " error" : "");
+        }
+        if (t === "session.error" || t === "session.status_terminated")
+          return "status terminated";
+        if (t === "session.status_running") return "status running";
+        if (t === "session.status_idle") return "status idle";
+        if (t === "session.status_rescheduled") return "status rescheduling";
+        return "other";
+      }
+
+      function bodyFor(ev) {
+        const t = ev.type;
+        const p = ev.payload || {};
+        if (t === "agent.message") {
+          const text = (p.content || [])
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("");
+          if (!text.trim()) return null;
+          return h("div", { class: "body", text });
+        }
+        if (t === "agent.thinking") {
+          const text =
+            (p.content || [])
+              .filter((b) => b.type === "thinking")
+              .map((b) => b.thinking || b.text)
+              .join("") ||
+            p.thinking ||
+            p.text ||
+            "";
+          if (!text.trim()) return null;
+          return h("div", { class: "body", text });
+        }
+        if (
+          t === "agent.tool_use" ||
+          t === "agent.mcp_tool_use" ||
+          t === "agent.custom_tool_use"
+        ) {
+          return renderToolUse(p);
+        }
+        if (t === "agent.tool_result" || t === "agent.mcp_tool_result") {
+          return renderToolResult(p);
+        }
+        if (t === "session.status_idle") {
+          return h("div", {
+            class: "body",
+            text:
+              "agent idle" +
+              (p.stop_reason ? ` · ${stopReasonStr(p.stop_reason)}` : ""),
+          });
+        }
+        if (t === "session.status_running") {
+          return h("div", { class: "body", text: "agent running" });
+        }
+        if (t === "session.status_terminated") {
+          return h("div", {
+            class: "body",
+            text:
+              "session terminated" +
+              (p.error?.message ? ` · ${p.error.message}` : ""),
+          });
+        }
+        if (t === "session.error") {
+          return h("div", {
+            class: "body",
+            text: "error · " + (p.error?.message || "(unspecified)"),
+          });
+        }
+        return null;
+      }
+
+      function renderToolUse(p) {
+        const name = p.name || "tool";
+        const input = p.input || {};
+        const tsum = toolSummary(name, input);
+        const summary = h(
+          "summary",
+          null,
+          h("span", { class: "marker", text: "▶" }),
+          h("span", { class: "tname", text: name }),
+          h("span", { class: "tsum", text: tsum }),
+        );
+        const tbody = h("div", { class: "tbody" });
+        if (name === "bash" && typeof input.command === "string") {
+          tbody.appendChild(h("pre", { class: "bash", text: input.command }));
+        } else if (
+          name === "str_replace" &&
+          input.old_str !== undefined &&
+          input.new_str !== undefined
+        ) {
+          if (input.path)
+            tbody.appendChild(
+              h(
+                "div",
+                { class: "field" },
+                h("b", { text: "path" }),
+                h("pre", { text: input.path }),
+              ),
+            );
+          tbody.appendChild(renderDiff(input.old_str, input.new_str));
+        } else if (
+          (name === "create" || name === "write") &&
+          typeof input.file_text === "string"
+        ) {
+          if (input.path)
+            tbody.appendChild(
+              h(
+                "div",
+                { class: "field" },
+                h("b", { text: "path" }),
+                h("pre", { text: input.path }),
+              ),
+            );
+          const text =
+            input.file_text.length > 4000
+              ? input.file_text.slice(0, 4000) + "\n…(truncated)"
+              : input.file_text;
+          tbody.appendChild(h("pre", { text }));
+        } else {
+          let pretty;
+          try {
+            pretty = JSON.stringify(input, null, 2);
+          } catch {
+            pretty = String(input);
+          }
+          tbody.appendChild(h("pre", { text: pretty }));
+        }
+        return h("details", null, summary, tbody);
+      }
+
+      function toolSummary(name, input) {
+        if (name === "bash" && typeof input.command === "string") {
+          return input.command.split("\n")[0].slice(0, 200);
+        }
+        if (typeof input.path === "string") return input.path;
+        for (const v of Object.values(input || {})) {
+          if (typeof v === "string") return v.slice(0, 200);
+        }
+        return "";
+      }
+
+      function renderDiff(oldStr, newStr) {
+        const d = h("div", { class: "diff" });
+        for (const line of String(oldStr || "").split("\n"))
+          d.appendChild(h("span", { class: "del", text: "- " + line }));
+        for (const line of String(newStr || "").split("\n"))
+          d.appendChild(h("span", { class: "add", text: "+ " + line }));
+        return d;
+      }
+
+      function renderToolResult(p) {
+        const blocks = Array.isArray(p.content) ? p.content : [];
+        const text = blocks
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("\n")
+          .trim();
+        const isErr = Boolean(p.is_error);
+        const head = isErr ? "✗ tool error" : "✓ tool result";
+        const preview = text.split("\n")[0]?.slice(0, 80) || "(empty)";
+        const summary = h(
+          "summary",
+          null,
+          h("span", { class: "marker", text: "▾ " }),
+          head + " · ",
+          h("span", { style: "color:var(--muted)", text: preview }),
+        );
+        const rbody = h(
+          "div",
+          { class: "rbody" },
+          h("pre", { text: text || "(empty)" }),
+        );
+        return h("details", null, summary, rbody);
+      }
+
+      // ---- pane --------------------------------------------------------------
+
+      function clearPane() {
+        state.events = [];
+        state.meta = null;
+        state.summary = null;
+        state.files = [];
+        const events = qs("#events");
+        clear(events);
+        events.appendChild(
+          h("div", {
+            class: "empty",
+            id: "empty",
+            text: "Select a session on the left, or hit + New to fire one off.",
+          }),
+        );
+        qs("#pane-head").style.display = "none";
+        qs("#composer-wrap").style.display = "none";
+      }
+
+      function paintHeader() {
+        qs("#pane-head").style.display = "flex";
+        qs("#composer-wrap").style.display = "block";
+        qs("#title-input").value = state.meta?.title || "";
+        const stats = qs("#stats");
+        clear(stats);
+        const status = state.summary?.status || "idle";
+        stats.appendChild(
+          h("span", { class: "status " + status, text: status }),
+        );
+        stats.appendChild(
+          h("span", null, h("b", { text: fmtTokens(state.summary?.usage) })),
+        );
+        stats.appendChild(
+          h(
+            "span",
+            null,
+            "events ",
+            h("b", { text: String(state.summary?.seq || 0) }),
+          ),
+        );
+        stats.appendChild(
+          h(
+            "span",
+            null,
+            "files ",
+            h("b", { text: String(state.summary?.fileCount || 0) }),
+          ),
+        );
+
+        const pc = state.summary?.pendingConfirm;
+        const pcEl = qs("#pending-confirm");
+        clear(pcEl);
+        if (pc) {
+          pcEl.style.display = "inline-flex";
+          pcEl.appendChild(document.createTextNode("confirm "));
+          pcEl.appendChild(h("b", { text: pc.name }));
+          pcEl.appendChild(document.createTextNode("? "));
+          pcEl.appendChild(
+            h("button", {
+              text: "y",
+              onclick: () => respondConfirm(pc.toolUseId, true),
+            }),
+          );
+          pcEl.appendChild(
+            h("button", {
+              text: "n",
+              onclick: () => respondConfirm(pc.toolUseId, false),
+            }),
+          );
+        } else {
+          pcEl.style.display = "none";
+        }
+      }
+
+      function appendEvents(events) {
+        const log = qs("#events");
+        const empty = qs("#empty");
+        if (empty) empty.remove();
+        const wasAtBottom = isAtBottom(log);
+        for (const ev of events) {
+          log.appendChild(renderEvent(ev));
+          state.events.push(ev);
+        }
+        if (wasAtBottom) {
+          log.scrollTop = log.scrollHeight;
+          qs("#scroll-bottom-btn").classList.remove("show");
+        } else {
+          qs("#scroll-bottom-btn").classList.add("show");
+        }
+      }
+      function isAtBottom(node) {
+        return node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+      }
+      qs("#events").addEventListener("scroll", () => {
+        if (isAtBottom(qs("#events")))
+          qs("#scroll-bottom-btn").classList.remove("show");
+      });
+      qs("#scroll-bottom-btn").addEventListener("click", () => {
+        const log = qs("#events");
+        log.scrollTop = log.scrollHeight;
+        qs("#scroll-bottom-btn").classList.remove("show");
+      });
+
+      // ---- session ops -------------------------------------------------------
+
+      async function refreshSessions() {
+        try {
+          const data = await api("/console/sessions");
+          state.sessions = data.sessions || [];
+          renderSessions();
+        } catch (e) {
+          if (e.message !== "unauthorized")
+            toast("sessions: " + e.message, "error");
+        }
+      }
+
+      async function selectSession(sessionId) {
+        if (state.selectedId === sessionId) return;
+        state.selectedId = sessionId;
+        if (state.eventSource) {
+          state.eventSource.close();
+          state.eventSource = null;
+        }
+        clearPane();
+        renderSessions();
+        paintConn("connecting");
+        await refreshFiles();
+        openStream(sessionId);
+      }
+
+      function openStream(sessionId) {
+        const url = `/console/stream?session=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`;
+        const es = new EventSource(url);
+        state.eventSource = es;
+
+        es.addEventListener("snapshot", (e) => {
+          const d = JSON.parse(e.data);
+          state.meta = d.meta;
+          state.summary = d.summary;
+          clear(qs("#events"));
+          appendEvents(d.events || []);
+          paintHeader();
+          paintConn("live");
+        });
+        es.addEventListener("events", (e) => {
+          const d = JSON.parse(e.data);
+          if (d.summary) state.summary = d.summary;
+          appendEvents(d.events || []);
+          paintHeader();
+          if (state.summary?.fileCount !== state.files.length) refreshFiles();
+        });
+        es.addEventListener("summary", (e) => {
+          const d = JSON.parse(e.data);
+          if (d.summary) {
+            state.summary = d.summary;
+            paintHeader();
+          }
+        });
+        es.addEventListener("done", () => {
+          es.close();
+          paintConn("idle");
+        });
+        es.addEventListener("error", () => {
+          paintConn("connecting");
+          if (sessionId !== state.selectedId) es.close();
+        });
+      }
+
+      function paintConn(s) {
+        const c = qs("#conn");
+        c.className = "conn " + s;
+        qs("#conn-text").textContent =
+          s === "live"
+            ? "live"
+            : s === "connecting"
+              ? "connecting…"
+              : s === "idle"
+                ? "idle"
+                : "disconnected";
+      }
+
+      async function refreshFiles() {
+        if (!state.selectedId) return;
+        try {
+          const data = await api(
+            `/console/files?session=${encodeURIComponent(state.selectedId)}`,
+          );
+          state.files = data.files || [];
+          paintFiles();
+        } catch (e) {
+          if (e.status !== 404 && e.status !== 502) console.warn("files:", e);
+        }
+      }
+
+      function paintFiles() {
+        const strip = qs("#files-strip");
+        clear(strip);
+        for (const f of state.files) {
+          const pill = h(
+            "div",
+            {
+              class: "file-pill",
+              onclick: () => downloadFile(f),
+              title: f.filename,
+            },
+            h("span", { text: f.filename }),
+            h("span", { class: "fsize", text: fmtSize(f.size) }),
+          );
+          strip.appendChild(pill);
+        }
+      }
+
+      function downloadFile(f) {
+        const url = `/console/file?session=${encodeURIComponent(state.selectedId)}&file_id=${encodeURIComponent(f.id)}&token=${encodeURIComponent(token)}`;
+        const a = h("a", { href: url, download: f.filename });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+
+      // ---- composer ---------------------------------------------------------
+
+      qs("#send-btn").addEventListener("click", sendReply);
+      qs("#reply-input").addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          e.preventDefault();
+          sendReply();
+        }
+      });
+      qs("#interrupt-btn").addEventListener("click", interruptSession);
+
+      async function sendReply() {
+        if (!state.selectedId) return;
+        const ta = qs("#reply-input");
+        const prompt = ta.value.trim();
+        if (!prompt) return;
+        ta.disabled = true;
+        try {
+          await api("/console/reply", {
+            method: "POST",
+            body: { session_id: state.selectedId, prompt },
+          });
+          ta.value = "";
+        } catch (e) {
+          toast("reply: " + e.message, "error");
+        } finally {
+          ta.disabled = false;
+          ta.focus();
+        }
+      }
+
+      async function interruptSession() {
+        if (!state.selectedId) return;
+        if (!confirm("interrupt this agent?")) return;
+        try {
+          await api("/console/interrupt", {
+            method: "POST",
+            body: { session_id: state.selectedId },
+          });
+          toast("interrupt sent", "ok");
+        } catch (e) {
+          toast("interrupt: " + e.message, "error");
+        }
+      }
+
+      async function respondConfirm(toolUseId, approve) {
+        try {
+          await api("/console/confirm", {
+            method: "POST",
+            body: {
+              session_id: state.selectedId,
+              tool_use_id: toolUseId,
+              approve,
+            },
+          });
+          toast(approve ? "approved" : "denied", approve ? "ok" : null);
+        } catch (e) {
+          toast("confirm: " + e.message, "error");
+        }
+      }
+
+      qs("#delete-btn").addEventListener("click", async () => {
+        if (!state.selectedId) return;
+        if (
+          !confirm(
+            `delete session "${state.meta?.title || state.selectedId}"?\n(its container is deleted; mirrored files on your Mac remain)`,
+          )
+        )
+          return;
+        try {
+          await api("/console/delete", {
+            method: "POST",
+            body: { session_id: state.selectedId },
+          });
+          state.selectedId = null;
+          if (state.eventSource) state.eventSource.close();
+          clearPane();
+          await refreshSessions();
+          toast("deleted", "ok");
+        } catch (e) {
+          toast("delete: " + e.message, "error");
+        }
+      });
+
+      qs("#rename-btn").addEventListener("click", async () => {
+        if (!state.selectedId) return;
+        const title = qs("#title-input").value.trim();
+        if (!title) return;
+        try {
+          await api("/console/rename", {
+            method: "POST",
+            body: { session_id: state.selectedId, title },
+          });
+          if (state.meta) state.meta.title = title;
+          toast("renamed", "ok");
+          await refreshSessions();
+        } catch (e) {
+          toast("rename: " + e.message, "error");
+        }
+      });
+
+      qs("#files-btn").addEventListener("click", refreshFiles);
+
+      // ---- new session -----------------------------------------------------
+
+      const spawnModal = qs("#spawn-modal");
+      qs("#new-btn").addEventListener("click", () => {
+        qs("#spawn-prompt").value = "";
+        qs("#spawn-title").value = "";
+        qs("#spawn-err").textContent = "";
+        spawnModal.classList.add("open");
+        setTimeout(() => qs("#spawn-prompt").focus(), 50);
+      });
+      qs("#spawn-cancel").addEventListener("click", () =>
+        spawnModal.classList.remove("open"),
+      );
+      qs("#spawn-go").addEventListener("click", spawn);
+      qs("#spawn-prompt").addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") spawn();
+      });
+      window.addEventListener("keydown", (e) => {
+        if (
+          e.key === "n" &&
+          !isTextInputFocused() &&
+          !spawnModal.classList.contains("open")
+        ) {
+          e.preventDefault();
+          qs("#new-btn").click();
+        }
+        if (e.key === "Escape") {
+          spawnModal.classList.remove("open");
+        }
+      });
+      function isTextInputFocused() {
+        const a = document.activeElement;
+        return a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA");
+      }
+
+      async function spawn() {
+        const prompt = qs("#spawn-prompt").value.trim();
+        if (!prompt) {
+          qs("#spawn-err").textContent = "prompt required";
+          return;
+        }
+        const title = qs("#spawn-title").value.trim();
+        const kind = qs("#spawn-kind").value;
+        qs("#spawn-err").textContent = "";
+        qs("#spawn-go").disabled = true;
+        try {
+          const r = await api("/console/spawn", {
+            method: "POST",
+            body: { prompt, title, kind },
+          });
+          spawnModal.classList.remove("open");
+          await refreshSessions();
+          await selectSession(r.session_id);
+          toast("session launched", "ok");
+        } catch (e) {
+          qs("#spawn-err").textContent = e.message;
+        } finally {
+          qs("#spawn-go").disabled = false;
+        }
+      }
+
+      // ---- boot --------------------------------------------------------------
+
+      if (!token) {
+        showAuth();
+      } else {
+        refreshSessions();
+      }
+      setInterval(refreshSessions, 5_000);
+    </script>
+  </body>
+</html>

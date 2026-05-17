@@ -1,0 +1,18 @@
+# m5stack runtime dependencies
+#
+# pyserial is bundled under onboard/scripts/vendor/ (BSD-3-Clause,
+# Apache-2.0-compatible) so a fresh clone has serial support without
+# a pip step. It is *not* listed below to avoid creating a duplicate
+# install in the user's environment when the vendored copy is
+# already on sys.path; if you specifically want it in your env,
+# `pip install pyserial==3.5` matches the vendored pin.
+#
+# esptool is GPLv2+. We do NOT vendor it — keeping the repo cleanly
+# Apache-2.0 means esptool comes from pip at install time. The
+# `m5-onboard` skill's preflight auto-installs it on first run if
+# it's missing from the user's environment, so attendees with
+# unconfigured machines still get a one-command experience.
+#
+# To install everything explicitly (CI, reproducible setup):
+#   python3 -m pip install --user -r requirements.txt
+esptool>=4.11
