@@ -302,7 +302,6 @@ class BuddyUI:
             and self._passkey is None
             and not self._unpair_prompt
         ):
-            _LCD.fillRect(0, 111, _W, _H - 111, BLACK)
             return
         # Thin orange hairline above the strip + DARK fill.
         _LCD.fillRect(0, 111, _W, 1, ORANGE)
@@ -417,32 +416,41 @@ class BuddyUI:
         _LCD.drawString("and pick this one", 6, 84)
 
     def _draw_connected_main(self):
-        _LCD.fillRect(0, 0, _W, 111, BLACK)
+        _LCD.fillRect(0, 0, _W, _H, PANEL_BG)
         hb = self._last
-        self._draw_usage_card(4, 8, "CLAUDE", CLAUDE_ICON, ORANGE, hb, "claude")
-        self._draw_usage_card(122, 8, "CODEX", GPT_ICON, PANEL_TEXT, hb, "codex")
+        prefix = self._usage_view(hb)
+        if prefix == "codex":
+            self._draw_usage_screen("CODEX", GPT_ICON, PANEL_TEXT, hb, "codex")
+        else:
+            self._draw_usage_screen("CLAUDE", CLAUDE_ICON, ORANGE, hb, "claude")
         if self._prompt:
             self._draw_prompt_box_compact(self._prompt)
 
-    def _draw_usage_card(self, x: int, y: int, title: str, icon, accent: int, hb: dict, prefix: str):
-        w = 114
-        h = 98
-        _LCD.fillRect(x, y, w, h, PANEL_BG)
-        _LCD.drawRect(x, y, w, h, PANEL_LINE)
+    def _usage_view(self, hb: dict) -> str:
+        view = str(
+            hb.get("usage_view")
+            or hb.get("provider")
+            or hb.get("model_family")
+            or "claude"
+        ).lower()
+        if "codex" in view:
+            return "codex"
+        return "claude"
 
-        self._draw_icon(icon, x + 8, y + 5, accent)
+    def _draw_usage_screen(self, title: str, icon, accent: int, hb: dict, prefix: str):
+        self._draw_icon(icon, 6, 3, accent)
         _LCD.setTextSize(1)
         _LCD.setTextColor(PANEL_TEXT, PANEL_BG)
-        _LCD.drawString(title, x + (w - _LCD.textWidth(title)) // 2, y + 8)
-        self._draw_battery_icon(x + w - 25, y + 7, PANEL_BG)
+        _LCD.drawString(title, _center(title), 7)
+        self._draw_battery_icon(_W - 24, 4, PANEL_BG)
 
         p5 = self._usage_pct(hb, prefix, "5h")
         r5 = self._usage_reset(hb, prefix, "5h", "IN 4 HR 1 MIN" if prefix == "claude" else "IN 2 HR 47 MIN")
-        self._draw_usage_row(x + 7, y + 27, w - 14, "5H", p5, accent, r5)
+        self._draw_usage_row(6, 34, _W - 12, "5H", p5, accent, r5)
 
         p7 = self._usage_pct(hb, prefix, "7d")
         r7 = self._usage_reset(hb, prefix, "7d", "TUE 9:00 AM" if prefix == "claude" else "MON 12:00 AM")
-        self._draw_usage_row(x + 7, y + 62, w - 14, "7D", p7, accent, r7)
+        self._draw_usage_row(6, 80, _W - 12, "7D", p7, accent, r7)
 
     def _usage_pct(self, hb: dict, prefix: str, window: str) -> int:
         key = "{}_{}_pct".format(prefix, window)
