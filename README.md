@@ -65,7 +65,7 @@ app.
 
 1. Clone this repo locally — anywhere is fine:
    ```bash
-   git clone https://github.com/dakshaymehta/cardputer-claude-os.git
+   git clone https://github.com/er1Ha/cardputer-claude-os-win.git
    ```
    The skill auto-detects the buddy bundle relative to its own install location, so the clone path doesn't matter. `~/Downloads/m5stack/` and `~/Desktop/m5stack/` are also checked as conventional fallbacks.
 2. Plug the Cardputer into your laptop via USB-C
