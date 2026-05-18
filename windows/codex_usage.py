@@ -54,6 +54,11 @@ def parse_event_ts(value: Any, fallback: float) -> datetime:
 
 
 def _codex_command() -> str | None:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        desktop_exe = Path(local_app_data) / "OpenAI" / "Codex" / "bin" / "codex.exe"
+        if desktop_exe.exists():
+            return str(desktop_exe)
     for name in ("codex.cmd", "codex.exe", "codex"):
         path = shutil.which(name)
         if path:
@@ -271,6 +276,16 @@ def resets_in_seconds(side: dict[str, Any]) -> int:
     return max(0, delta)
 
 
+def official_reset_label(side: dict[str, Any], window_minutes: int) -> str:
+    resets_at = side.get("resets_at")
+    if not isinstance(resets_at, (int, float)):
+        return ""
+    dt = datetime.fromtimestamp(resets_at).astimezone()
+    if window_minutes <= 300:
+        return dt.strftime("%H:%M")
+    return f"{dt.month}\u6708{dt.day}\u65e5 {dt:%H:%M}"
+
+
 def _percent_override(cfg: dict[str, Any], used_key: str, remaining_key: str) -> tuple[float, str] | None:
     if cfg.get(used_key) is not None:
         return float(cfg[used_key]), "used"
@@ -314,11 +329,11 @@ def build_payload(cfg: dict[str, Any]) -> dict[str, Any]:
     rate_limits = latest_codex_rate_limits() or {}
     primary = rate_limits.get("primary") if isinstance(rate_limits.get("primary"), dict) else {}
     secondary = rate_limits.get("secondary") if isinstance(rate_limits.get("secondary"), dict) else {}
-    use_manual = bool(cfg.get("use_manual_usage_overrides"))
+    use_manual = bool(cfg.get("codex_use_manual_usage_overrides", cfg.get("use_manual_usage_overrides")))
     h5_override = _percent_override(cfg, "codex_5h_used_percent", "codex_5h_remaining_percent") if use_manual else None
     d7_override = _percent_override(cfg, "codex_7d_used_percent", "codex_7d_remaining_percent") if use_manual else None
-    h5_reset_label = str(cfg.get("codex_5h_reset_label") or "")
-    d7_reset_label = str(cfg.get("codex_7d_reset_label") or "")
+    h5_reset_label = str(cfg.get("codex_5h_reset_label") or official_reset_label(primary, 300))
+    d7_reset_label = str(cfg.get("codex_7d_reset_label") or official_reset_label(secondary, 10080))
     display_remaining = bool(cfg.get("codex_display_remaining"))
     return {
         "codex": {
