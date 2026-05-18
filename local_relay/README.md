@@ -16,6 +16,8 @@ subscription quota — not pay-as-you-go API credit.
   `rate_limits` events (`primary` = 5h window, `secondary` = 7d
   window) and surfaces the same `used_percent` + `resets_at` numbers
   ChatGPT shows you in the browser.
+- Accepts `POST /usage` from host-side scripts. Posted values override
+  the live scan until the relay restarts.
 
 ## Requirements
 
@@ -53,6 +55,10 @@ $h = @{ "x-device-secret" = "<your-secret>"; "content-type" = "application/json"
 # Usage dashboard data
 Invoke-RestMethod -Uri http://127.0.0.1:8787/usage -Headers $h | ConvertTo-Json -Depth 4
 
+# Push current Codex and Claude usage into the relay cache
+py ..\windows\codex_usage.py --relay http://127.0.0.1:8787 --secret "<your-secret>"
+py ..\windows\claude_usage.py --relay http://127.0.0.1:8787 --secret "<your-secret>"
+
 # Claude chat (one-shot, uses Pro/Max quota)
 Invoke-RestMethod -Uri http://127.0.0.1:8787/ask   -Method POST -Headers $h `
                   -Body (@{ prompt = "say hi in 5 words" } | ConvertTo-Json)
@@ -68,6 +74,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8787/codex -Method POST -Headers $h `
 | ------ | ------------------- | --------------------- | ----------------------------- |
 | GET    | `/`                 | —                     | `{"ok": true}` (health)       |
 | GET    | `/usage`            | —                     | `{claude: {h5,d7}, codex: {h5,d7}}` |
+| POST   | `/usage`            | `{claude:{primary,secondary}}` or `{codex:{primary,secondary}}` | updates cached usage |
 | POST   | `/ask` / `/ask-text` / `/claude` | `{"prompt":"..."}` | `{transcript, response}` (via `claude -p`) |
 | POST   | `/codex`            | `{"prompt":"..."}`    | `{transcript, response}` (via `codex exec`) |
 | POST   | `/reset`            | —                     | no-op (local relay is stateless) |
@@ -88,11 +95,23 @@ DEVICE_SECRET = "<same secret you passed to relay.py>"
 
 Claude's quota system doesn't expose `used_percent` like Codex does, so
 this script estimates it by summing tokens from your local session
-log against a configurable ceiling. Defaults: 200k tokens/5h, 2M
+log against a configurable ceiling. Defaults: 2M tokens/5h, 20M
 tokens/7d (rough Max plan figures). Adjust via flags:
 
 ```powershell
 py -3 relay.py --secret <s> --claude-5h-cap 500000 --claude-7d-cap 5000000
+```
+
+The standalone `windows/claude_usage.py` and `mac/claude-usage`
+scripts also read:
+
+```json
+{
+  "worker_base": "http://127.0.0.1:8787",
+  "device_secret": "YOUR_DEVICE_SECRET",
+  "claude_5h_token_cap": 2000000,
+  "claude_7d_token_cap": 20000000
+}
 ```
 
 Codex numbers come straight from the CLI's own log and ignore these

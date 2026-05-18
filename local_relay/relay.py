@@ -30,14 +30,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOME = Path(os.path.expanduser("~"))
 CLAUDE_DIR = HOME / ".claude"
+CLAUDE_PROJECTS = CLAUDE_DIR / "projects"
 CODEX_DIR = HOME / ".codex"
 CODEX_SESSIONS = CODEX_DIR / "sessions"
 
-DEFAULT_CLAUDE_5H_CAP = 200_000
-DEFAULT_CLAUDE_7D_CAP = 2_000_000
+DEFAULT_CLAUDE_5H_CAP = 2_000_000
+DEFAULT_CLAUDE_7D_CAP = 20_000_000
 
 SECRET: str | None = None
 CONFIG: dict = {}
+USAGE_OVERRIDES: dict[str, dict] = {}
 
 
 def now_utc() -> datetime:
@@ -100,7 +102,7 @@ def claude_window():
     h5_used = 0
     d7_used = 0
     earliest_in_5h: datetime | None = None
-    for obj in iter_jsonl(CLAUDE_DIR, days_back=7):
+    for obj in iter_jsonl(CLAUDE_PROJECTS, days_back=7):
         rec = tokens_from_entry(obj)
         if not rec:
             continue
@@ -217,8 +219,42 @@ def fmt_d7_reset(dt_utc: datetime) -> str:
     return local.strftime(fmt).upper()
 
 
+def _posted_slot(slot: dict, window_minutes: int) -> dict:
+    used = float(slot.get("used_percent", slot.get("pct", 0)) or 0)
+    resets_in = int(slot.get("resets_in_seconds", 0) or 0)
+    reset = slot.get("reset") or fmt_reset_in(resets_in)
+    return {
+        "pct": min(100, int(round(used))),
+        "used": slot.get("used"),
+        "cap": slot.get("cap"),
+        "reset": reset,
+        "window_minutes": int(slot.get("window_minutes", window_minutes) or window_minutes),
+        "source": slot.get("source", "posted"),
+    }
+
+
+def normalize_posted_usage(side: dict) -> dict | None:
+    if not isinstance(side, dict):
+        return None
+    primary = side.get("primary") or side.get("h5")
+    secondary = side.get("secondary") or side.get("d7")
+    if not isinstance(primary, dict) and not isinstance(secondary, dict):
+        return None
+    existing = {}
+    if isinstance(primary, dict):
+        existing["h5"] = _posted_slot(primary, 300)
+    if isinstance(secondary, dict):
+        existing["d7"] = _posted_slot(secondary, 10080)
+    return existing
+
+
 def build_usage():
-    return {"claude": claude_window(), "codex": codex_window()}
+    usage = {"claude": claude_window(), "codex": codex_window()}
+    for name, override in USAGE_OVERRIDES.items():
+        merged = dict(usage.get(name, {}))
+        merged.update(override)
+        usage[name] = merged
+    return usage
 
 
 # ---------- CLI runner ------------------------------------------------------
@@ -307,6 +343,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        global USAGE_OVERRIDES
         if not self._auth():
             return self._send(401, {"error": "unauthorized"})
         length = int(self.headers.get("content-length") or 0)
@@ -315,6 +352,17 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(raw.decode("utf-8")) if raw else {}
         except json.JSONDecodeError:
             return self._send(400, {"error": "invalid json"})
+        if self.path == "/usage":
+            updated = []
+            for name in ("claude", "codex"):
+                normalized = normalize_posted_usage(data.get(name))
+                if normalized:
+                    USAGE_OVERRIDES[name] = normalized
+                    updated.append(name)
+            if not updated:
+                return self._send(400, {"error": "expected claude or codex usage payload"})
+            return self._send(200, {"ok": True, "updated": updated, "usage": build_usage()})
+
         prompt = (data.get("prompt") or data.get("text") or "").strip()
         if not prompt:
             return self._send(400, {"error": "empty prompt"})
@@ -366,7 +414,7 @@ def main():
     print(f"  listening on http://{args.host}:{args.port}")
     print(f"  LAN url:     http://{ip}:{args.port}   <- put this on the device")
     print(f"  auth:        {'ON (x-device-secret required)' if SECRET else 'OFF (no secret)'}")
-    print(f"  claude dir:  {CLAUDE_DIR} ({'OK' if CLAUDE_DIR.exists() else 'MISSING'})")
+    print(f"  claude dir:  {CLAUDE_PROJECTS} ({'OK' if CLAUDE_PROJECTS.exists() else 'MISSING'})")
     print(f"  codex  dir:  {CODEX_DIR} ({'OK' if CODEX_DIR.exists() else 'MISSING'})")
     print(f"  codex sess:  {CODEX_SESSIONS} ({'OK' if CODEX_SESSIONS.exists() else 'MISSING — codex usage will be 0'})")
     print(f"  claude CLI:  {resolve_cli('claude') or 'NOT FOUND on PATH'}")
