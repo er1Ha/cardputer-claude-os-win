@@ -142,7 +142,7 @@ def _bucket(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     out: dict[str, Any] = {}
-    for k in ("used_percent", "window_minutes", "resets_in_seconds"):
+    for k in ("used_percent", "window_minutes", "resets_in_seconds", "resets_at"):
         v = raw.get(k)
         if isinstance(v, (int, float)):
             out[k] = v

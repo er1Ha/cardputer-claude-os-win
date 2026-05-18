@@ -16,19 +16,25 @@ const USAGE_TTL_S = 3600;
 // the labels in here.
 //
 // {
-//   primary:   { used_percent: 56.7, window_minutes: 300,   resets_in_seconds: 12345 },
-//   secondary: { used_percent: 18.2, window_minutes: 10080, resets_in_seconds: 345678 },
+//   primary:   { used_percent: 33.0, window_minutes: 300,   resets_at: 1779106167 },
+//   secondary: { used_percent: 11.0, window_minutes: 10080, resets_at: 1779643085 },
 //   ts: <unix seconds, server-set>
 // }
+//
+// `resets_at` is Codex CLI's native shape (unix seconds). Older shapes
+// using `resets_in_seconds` are passed through too for robustness.
 
 function _bucket(raw) {
   if (!raw || typeof raw !== "object") return null;
   const out = {};
-  if (typeof raw.used_percent === "number") out.used_percent = raw.used_percent;
-  if (typeof raw.window_minutes === "number")
-    out.window_minutes = raw.window_minutes;
-  if (typeof raw.resets_in_seconds === "number")
-    out.resets_in_seconds = raw.resets_in_seconds;
+  for (const k of [
+    "used_percent",
+    "window_minutes",
+    "resets_at",
+    "resets_in_seconds",
+  ]) {
+    if (typeof raw[k] === "number") out[k] = raw[k];
+  }
   return Object.keys(out).length ? out : null;
 }
 
