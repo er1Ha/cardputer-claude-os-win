@@ -266,13 +266,28 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write(f"[{self.log_date_time_string()}] {fmt % args}\n")
 
+    def _cors(self):
+        # Permissive CORS so the file:// preview page (and any browser
+        # client on the LAN) can hit /usage without a preflight failure.
+        self.send_header("access-control-allow-origin", "*")
+        self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
+        self.send_header("access-control-allow-headers", "content-type, x-device-secret")
+        self.send_header("access-control-max-age", "600")
+
     def _send(self, code: int, obj):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(code)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
+        self._cors()
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors()
+        self.send_header("content-length", "0")
+        self.end_headers()
 
     def _auth(self) -> bool:
         if not SECRET:
