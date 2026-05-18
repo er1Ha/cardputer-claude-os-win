@@ -10,9 +10,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sqlite3
 import ssl
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -48,6 +51,107 @@ def parse_event_ts(value: Any, fallback: float) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _codex_command() -> str | None:
+    for name in ("codex.cmd", "codex.exe", "codex"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def _app_server_request(timeout_seconds: int = 12) -> dict[str, Any] | None:
+    exe = _codex_command()
+    if not exe:
+        return None
+    try:
+        proc = subprocess.Popen(
+            [exe, "app-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return None
+
+    try:
+        requests = [
+            {
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {"name": "cardputer-usage", "version": "0.1.0"},
+                    "capabilities": {"experimentalApi": True},
+                },
+            },
+            {"id": 2, "method": "account/rateLimits/read", "params": None},
+        ]
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        for request in requests:
+            proc.stdin.write(json.dumps(request) + "\n")
+            proc.stdin.flush()
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == 2 and isinstance(msg.get("result"), dict):
+                return msg["result"]
+    finally:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    return None
+
+
+def _normalize_app_server_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {
+        "limit_id": snapshot.get("limitId"),
+        "limit_name": snapshot.get("limitName"),
+        "credits": snapshot.get("credits"),
+        "plan_type": snapshot.get("planType"),
+        "rate_limit_reached_type": snapshot.get("rateLimitReachedType"),
+        "source": "codex_app_server",
+    }
+    for src_key, dst_key in (("primary", "primary"), ("secondary", "secondary")):
+        side = snapshot.get(src_key)
+        if not isinstance(side, dict):
+            continue
+        normalized[dst_key] = {
+            "used_percent": side.get("usedPercent", 0),
+            "window_minutes": side.get("windowDurationMins"),
+            "resets_at": side.get("resetsAt"),
+            "source": "codex_app_server",
+        }
+    return normalized
+
+
+def latest_codex_rate_limits_from_app_server() -> dict[str, Any] | None:
+    result = _app_server_request()
+    if not result:
+        return None
+    by_limit = result.get("rateLimitsByLimitId")
+    snapshot = None
+    if isinstance(by_limit, dict):
+        snapshot = by_limit.get("codex")
+    if not isinstance(snapshot, dict):
+        snapshot = result.get("rateLimits")
+    if not isinstance(snapshot, dict):
+        return None
+    return _normalize_app_server_snapshot(snapshot)
 
 
 def _extract_json_object(text: str, marker: str) -> dict[str, Any] | None:
@@ -152,7 +256,11 @@ def latest_codex_rate_limits_from_rollouts() -> dict[str, Any] | None:
 
 
 def latest_codex_rate_limits() -> dict[str, Any] | None:
-    return latest_codex_rate_limits_from_sqlite() or latest_codex_rate_limits_from_rollouts()
+    return (
+        latest_codex_rate_limits_from_app_server()
+        or latest_codex_rate_limits_from_sqlite()
+        or latest_codex_rate_limits_from_rollouts()
+    )
 
 
 def resets_in_seconds(side: dict[str, Any]) -> int:
@@ -182,7 +290,7 @@ def usage_slot(
         "used_percent": max(0.0, min(100.0, used_percent)),
         "window_minutes": window_minutes,
         "resets_in_seconds": resets_in_seconds(side),
-        "source": "codex_official_override" if override is not None else "codex_rate_limits",
+        "source": "codex_official_override" if override is not None else side.get("source", "codex_rate_limits"),
     }
 
 
