@@ -38,23 +38,27 @@ def load_config() -> dict[str, Any]:
     return cfg if isinstance(cfg, dict) else {}
 
 
+def parse_event_ts(value: Any, fallback: float) -> datetime:
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        dt = datetime.fromtimestamp(fallback, tz=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def latest_codex_rate_limits() -> dict[str, Any] | None:
     if not CODEX_SESSIONS.exists():
         return None
-    try:
-        rollouts = sorted(
-            CODEX_SESSIONS.rglob("rollout-*.jsonl"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-    except OSError:
-        return None
-    for path in rollouts[:10]:
+    newest: tuple[datetime, dict[str, Any]] | None = None
+    for path in CODEX_SESSIONS.rglob("rollout-*.jsonl"):
         try:
+            mtime = path.stat().st_mtime
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
-        for line in reversed(lines):
+        for line in lines:
             if '"rate_limits"' not in line:
                 continue
             try:
@@ -64,8 +68,10 @@ def latest_codex_rate_limits() -> dict[str, Any] | None:
             payload = obj.get("payload") or {}
             rate_limits = payload.get("rate_limits")
             if isinstance(rate_limits, dict):
-                return rate_limits
-    return None
+                ts = parse_event_ts(obj.get("timestamp"), mtime)
+                if newest is None or ts > newest[0]:
+                    newest = (ts, rate_limits)
+    return newest[1] if newest else None
 
 
 def resets_in_seconds(side: dict[str, Any]) -> int:

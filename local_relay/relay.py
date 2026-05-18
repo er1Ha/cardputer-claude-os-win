@@ -139,22 +139,17 @@ def claude_window():
 # ---------- Codex: scan rollout-*.jsonl for the latest rate_limits ---------
 
 def latest_codex_rate_limits() -> dict | None:
-    """Find the most recent rollout JSONL, scan it from the bottom for
-    a `rate_limits` payload, return that dict, or None."""
+    """Return the newest `rate_limits` payload by event timestamp."""
     if not CODEX_SESSIONS.exists():
         return None
-    rollouts = sorted(
-        CODEX_SESSIONS.rglob("rollout-*.jsonl"),
-        key=lambda p: p.stat().st_mtime if p.exists() else 0,
-        reverse=True,
-    )
-    for p in rollouts[:3]:
+    newest: tuple[datetime, dict] | None = None
+    for p in CODEX_SESSIONS.rglob("rollout-*.jsonl"):
         try:
             with p.open("r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             continue
-        for ln in reversed(lines):
+        for ln in lines:
             ln = ln.strip()
             if not ln or '"rate_limits"' not in ln:
                 continue
@@ -164,9 +159,17 @@ def latest_codex_rate_limits() -> dict | None:
                 continue
             payload = obj.get("payload") or {}
             rl = payload.get("rate_limits")
-            if isinstance(rl, dict):
-                return rl
-    return None
+            if not isinstance(rl, dict):
+                continue
+            try:
+                ts = datetime.fromisoformat(str(obj.get("timestamp", "")).replace("Z", "+00:00"))
+            except ValueError:
+                ts = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if newest is None or ts > newest[0]:
+                newest = (ts, rl)
+    return newest[1] if newest else None
 
 
 def codex_window():
@@ -222,7 +225,12 @@ def fmt_d7_reset(dt_utc: datetime) -> str:
 def _posted_slot(slot: dict, window_minutes: int) -> dict:
     used = float(slot.get("used_percent", slot.get("pct", 0)) or 0)
     resets_in = int(slot.get("resets_in_seconds", 0) or 0)
-    reset = slot.get("reset") or fmt_reset_in(resets_in)
+    if slot.get("reset"):
+        reset = slot["reset"]
+    elif window_minutes >= 24 * 60 and resets_in > 24 * 3600:
+        reset = fmt_d7_reset(now_utc() + timedelta(seconds=resets_in))
+    else:
+        reset = fmt_reset_in(resets_in)
     return {
         "pct": min(100, int(round(used))),
         "used": slot.get("used"),
