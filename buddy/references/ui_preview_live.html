@@ -282,7 +282,10 @@
     const unit = side.mode === 'remaining' ? 'LEFT' : 'USED';
     row.querySelector('.row-pct').textContent = `${pct}% ${unit}`;
     row.querySelector('.bar > i').style.width = `${pct}%`;
-    row.querySelector('.foot').textContent = `RESETS ${(side.reset || '').toUpperCase()}`;
+    const reset = side.reset || '';
+    row.querySelector('.foot').textContent = screen === 'codex'
+      ? `重置时间：${reset}`
+      : `RESETS ${reset.toUpperCase()}`;
   }
 
   async function refresh() {
