@@ -145,14 +145,59 @@ def _claude_desktop_cookies() -> str | None:
 
 
 def _organization_uuid() -> str | None:
+    """Try the Claude Code OAuth credential file. Usually does NOT have
+    organizationUuid — that's a Claude Desktop / web concept — so
+    callers should fall back to ``_organization_uuid_from_api``."""
     if not CLAUDE_CREDENTIALS_PATH.exists():
         return None
     try:
         creds = json.loads(CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
         return None
-    org = creds.get("organizationUuid")
-    return org if isinstance(org, str) and org else None
+    for key in ("organizationUuid", "organization_uuid", "orgUuid"):
+        val = creds.get(key)
+        if isinstance(val, str) and val:
+            return val
+    inner = creds.get("claudeAiOauth")
+    if isinstance(inner, dict):
+        for key in ("organizationUuid", "organization_uuid"):
+            val = inner.get(key)
+            if isinstance(val, str) and val:
+                return val
+    return None
+
+
+def _claude_request(path: str, cookies: str) -> Any:
+    url = "https://claude.ai" + path
+    headers = {
+        "accept": "application/json,text/plain,*/*",
+        "cookie": cookies,
+        "origin": "https://claude.ai",
+        "referer": "https://claude.ai/settings/usage",
+        "user-agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Claude/1.7196.0 Chrome/142.0.7444.200 Electron/41.5.0 Safari/537.36"
+        ),
+        "x-requested-with": "XMLHttpRequest",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _organization_uuid_from_api(cookies: str) -> str | None:
+    try:
+        data = _claude_request("/api/organizations", cookies)
+    except Exception:
+        return None
+    if isinstance(data, list) and data:
+        first = data[0]
+        if isinstance(first, dict):
+            for key in ("uuid", "id", "organizationUuid"):
+                val = first.get(key)
+                if isinstance(val, str) and val:
+                    return val
+    return None
 
 
 def parse_ts(value: Any) -> datetime | None:
@@ -257,29 +302,69 @@ def _status_slot(side: dict[str, Any], window_minutes: int) -> dict[str, Any]:
     }
 
 
-def payload_from_desktop_usage_api() -> dict[str, Any] | None:
-    org = _organization_uuid()
-    cookies = _claude_desktop_cookies()
-    if not org or not cookies:
-        return None
+def payload_from_desktop_usage_api(
+    *,
+    session_key: str | None = None,
+    organization_uuid: str | None = None,
+    debug: bool = False,
+) -> dict[str, Any] | None:
+    """Hit https://claude.ai/api/organizations/{org}/usage as the web app does.
+
+    Cookie source priority:
+      1. Explicit ``session_key`` — wrapped as ``sessionKey=<value>``.
+         Most reliable; copy from browser DevTools → Application →
+         Cookies → claude.ai → sessionKey.
+      2. Claude Desktop's encrypted cookie SQLite (DPAPI + AES-GCM via
+         the ``cryptography`` package). Fragile.
+
+    Org UUID source priority:
+      1. Explicit ``organization_uuid``.
+      2. ~/.claude/.credentials.json (usually not present there).
+      3. GET /api/organizations using the cookies.
+    """
+    def _log(msg: str) -> None:
+        if debug:
+            print(f"[claude_usage] {msg}", file=sys.stderr)
+
+    if session_key:
+        cookies = f"sessionKey={session_key}"
+        _log("using session_key from arg/config")
+    else:
+        cookies = _claude_desktop_cookies()
+        if cookies:
+            _log("using cookies extracted from Claude Desktop")
+        else:
+            _log(
+                "no session_key provided and Claude Desktop cookies unreadable "
+                "(install + login to Claude Desktop, or pass --session-key, or "
+                'set "claude_session_key" in config.json)'
+            )
+            return None
+
+    org = organization_uuid or _organization_uuid()
+    if not org:
+        org = _organization_uuid_from_api(cookies)
+        if org:
+            _log(f"resolved org uuid via /api/organizations: {org}")
+        else:
+            _log("could not resolve organization uuid (sessionKey may be invalid)")
+            return None
+    else:
+        _log(f"using org uuid {org}")
+
     url = f"https://claude.ai/api/organizations/{org}/usage"
-    headers = {
-        "accept": "application/json,text/plain,*/*",
-        "cookie": cookies,
-        "origin": "https://claude.ai",
-        "referer": "https://claude.ai/settings/usage",
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Claude/1.7196.0 Chrome/142.0.7444.200 Electron/41.5.0 Safari/537.36"
-        ),
-        "x-requested-with": "XMLHttpRequest",
-    }
-    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
+        data = _claude_request(f"/api/organizations/{org}/usage", cookies)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        _log(f"GET {url} → HTTP {e.code}: {body[:200]}")
         return None
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        _log(f"GET {url} failed: {e}")
+        return None
+    if debug:
+        keys = sorted(data.keys()) if isinstance(data, dict) else type(data).__name__
+        _log(f"usage payload keys: {keys}")
     now = datetime.now(timezone.utc)
 
     def slot(name: str, window_minutes: int) -> dict[str, Any] | None:
@@ -415,12 +500,27 @@ def main() -> None:
     parser.add_argument("--secret", default=cfg.get("device_secret") or os.environ.get("DEVICE_SECRET", ""))
     parser.add_argument("--claude-5h-token-cap", type=int, default=int(cfg.get("claude_5h_token_cap", DEFAULT_CLAUDE_5H_TOKEN_CAP)))
     parser.add_argument("--claude-7d-token-cap", type=int, default=int(cfg.get("claude_7d_token_cap", DEFAULT_CLAUDE_7D_TOKEN_CAP)))
+    parser.add_argument("--session-key", default=cfg.get("claude_session_key") or os.environ.get("CLAUDE_SESSION_KEY", ""),
+                        help="claude.ai sessionKey cookie (copy from browser DevTools)")
+    parser.add_argument("--organization-uuid", default=cfg.get("claude_organization_uuid", ""),
+                        help="claude.ai org UUID; auto-discovered if omitted")
+    parser.add_argument("--debug", action="store_true", help="print which data source was used and why fallbacks happened")
     args = parser.parse_args()
 
     use_manual = bool(cfg.get("claude_use_manual_usage_overrides", cfg.get("use_manual_usage_overrides")))
+    desktop_payload = payload_from_desktop_usage_api(
+        session_key=args.session_key or None,
+        organization_uuid=args.organization_uuid or None,
+        debug=args.debug,
+    )
+    if args.debug and desktop_payload is None:
+        print("[claude_usage] desktop_usage_api unavailable, trying statusline", file=sys.stderr)
+    statusline_payload = None if desktop_payload else payload_from_statusline(int(cfg.get("claude_status_max_age_seconds", 3600)))
+    if args.debug and desktop_payload is None and statusline_payload is None:
+        print("[claude_usage] statusline unavailable, falling back to JSONL token estimate", file=sys.stderr)
     payload = (
-        payload_from_desktop_usage_api()
-        or payload_from_statusline(int(cfg.get("claude_status_max_age_seconds", 3600)))
+        desktop_payload
+        or statusline_payload
         or build_payload(
         args.claude_5h_token_cap,
         args.claude_7d_token_cap,
