@@ -180,18 +180,18 @@
           <div class="row">
             <div class="row-top">
               <div class="row-label">5H</div>
-              <div class="row-pct">55% USED</div>
+              <div class="row-pct">--% USED</div>
             </div>
-            <div class="bar"><i style="width:55%"></i></div>
-            <div class="foot">RESETS IN 4 HR 1 MIN</div>
+            <div class="bar"><i style="width:0%"></i></div>
+            <div class="foot">WAITING FOR RELAY</div>
           </div>
           <div class="row">
             <div class="row-top">
               <div class="row-label">7D</div>
-              <div class="row-pct">12% USED</div>
+              <div class="row-pct">--% USED</div>
             </div>
-            <div class="bar"><i style="width:12%"></i></div>
-            <div class="foot">RESETS TUE 9:00 AM</div>
+            <div class="bar"><i style="width:0%"></i></div>
+            <div class="foot">WAITING FOR RELAY</div>
           </div>
         </div>
       </div>
@@ -213,18 +213,18 @@
           <div class="row">
             <div class="row-top">
               <div class="row-label">5H</div>
-              <div class="row-pct">42% USED</div>
+              <div class="row-pct">--% USED</div>
             </div>
-            <div class="bar"><i style="width:42%"></i></div>
-            <div class="foot">RESETS IN 2 HR 47 MIN</div>
+            <div class="bar"><i style="width:0%"></i></div>
+            <div class="foot">WAITING FOR RELAY</div>
           </div>
           <div class="row">
             <div class="row-top">
               <div class="row-label">7D</div>
-              <div class="row-pct">15% USED</div>
+              <div class="row-pct">--% USED</div>
             </div>
-            <div class="bar"><i style="width:15%"></i></div>
-            <div class="foot">RESETS MON 12:00 AM</div>
+            <div class="bar"><i style="width:0%"></i></div>
+            <div class="foot">WAITING FOR RELAY</div>
           </div>
         </div>
       </div>
@@ -303,9 +303,13 @@
         setRow(screen, 'h5', blk.h5 || {});
         setRow(screen, 'd7', blk.d7 || {});
       }
-      $status.textContent = 'updated ' + new Date().toLocaleTimeString();
+      const cs = data.claude || {};
+      const xs = data.codex || {};
+      const csrc = [cs.h5?.source, cs.d7?.source].filter(Boolean).join('/') || 'unknown';
+      const xsrc = [xs.h5?.source, xs.d7?.source].filter(Boolean).join('/') || 'unknown';
+      $status.textContent = `updated ${new Date().toLocaleTimeString()} | claude ${csrc} | codex ${xsrc}`;
     } catch (e) {
-      $status.textContent = 'error: ' + e.message;
+      $status.textContent = 'error: ' + e.message + ' | check relay url + secret';
     }
   }
 
