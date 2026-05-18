@@ -110,12 +110,21 @@ scripts also read:
   "worker_base": "http://127.0.0.1:8787",
   "device_secret": "YOUR_DEVICE_SECRET",
   "claude_5h_token_cap": 2000000,
-  "claude_7d_token_cap": 20000000
+  "claude_7d_token_cap": 205000,
+  "claude_5h_used_percent": 0,
+  "claude_7d_used_percent": 28,
+  "codex_5h_remaining_percent": 84,
+  "codex_7d_remaining_percent": 73
 }
 ```
 
-Codex numbers come straight from the CLI's own log and ignore these
-flags entirely.
+The `*_used_percent` and `*_remaining_percent` fields are optional
+manual overrides for matching the official account pages. Codex's
+official status page reports remaining quota, so the script converts
+remaining percent to the UI's `USED` percent.
+
+Codex numbers come straight from the CLI's own log unless the optional
+official-page override fields are present.
 
 ## Firewall
 

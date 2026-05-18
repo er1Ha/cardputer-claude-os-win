@@ -32,7 +32,7 @@ def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         return {}
     try:
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as e:
         die(f"invalid JSON in {CONFIG_PATH}: {e}")
     return cfg if isinstance(cfg, dict) else {}
@@ -82,23 +82,39 @@ def resets_in_seconds(side: dict[str, Any]) -> int:
     return max(0, delta)
 
 
-def usage_slot(side: dict[str, Any], window_minutes: int) -> dict[str, Any]:
+def _percent_override(cfg: dict[str, Any], used_key: str, remaining_key: str) -> float | None:
+    if cfg.get(used_key) is not None:
+        return float(cfg[used_key])
+    if cfg.get(remaining_key) is not None:
+        return 100.0 - float(cfg[remaining_key])
+    return None
+
+
+def usage_slot(
+    side: dict[str, Any],
+    window_minutes: int,
+    *,
+    override: float | None = None,
+) -> dict[str, Any]:
+    used_percent = override if override is not None else float(side.get("used_percent", 0) or 0)
     return {
-        "used_percent": float(side.get("used_percent", 0) or 0),
+        "used_percent": max(0.0, min(100.0, used_percent)),
         "window_minutes": window_minutes,
         "resets_in_seconds": resets_in_seconds(side),
-        "source": "codex_rate_limits",
+        "source": "codex_official_override" if override is not None else "codex_rate_limits",
     }
 
 
-def build_payload() -> dict[str, Any]:
+def build_payload(cfg: dict[str, Any]) -> dict[str, Any]:
     rate_limits = latest_codex_rate_limits() or {}
     primary = rate_limits.get("primary") if isinstance(rate_limits.get("primary"), dict) else {}
     secondary = rate_limits.get("secondary") if isinstance(rate_limits.get("secondary"), dict) else {}
+    h5_override = _percent_override(cfg, "codex_5h_used_percent", "codex_5h_remaining_percent")
+    d7_override = _percent_override(cfg, "codex_7d_used_percent", "codex_7d_remaining_percent")
     return {
         "codex": {
-            "primary": usage_slot(primary, 300),
-            "secondary": usage_slot(secondary, 10080),
+            "primary": usage_slot(primary, 300, override=h5_override),
+            "secondary": usage_slot(secondary, 10080, override=d7_override),
         }
     }
 
@@ -129,7 +145,7 @@ def main() -> None:
     parser.add_argument("--secret", default=cfg.get("device_secret") or os.environ.get("DEVICE_SECRET", ""))
     args = parser.parse_args()
 
-    payload = build_payload()
+    payload = build_payload(cfg)
     result = post_usage(args.relay, args.secret, payload)
     codex = result.get("usage", {}).get("codex", {})
     h5 = codex.get("h5", {}).get("pct", payload["codex"]["primary"]["used_percent"])

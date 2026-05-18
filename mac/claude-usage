@@ -22,7 +22,7 @@ from typing import Any
 CONFIG_PATH = Path("~/.config/claude-pager/config.json").expanduser()
 CLAUDE_PROJECTS = Path("~/.claude/projects").expanduser()
 DEFAULT_CLAUDE_5H_TOKEN_CAP = 2_000_000
-DEFAULT_CLAUDE_7D_TOKEN_CAP = 20_000_000
+DEFAULT_CLAUDE_7D_TOKEN_CAP = 205_000
 TIMEOUT = 20
 
 
@@ -35,7 +35,7 @@ def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         return {}
     try:
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as e:
         die(f"invalid JSON in {CONFIG_PATH}: {e}")
     return cfg if isinstance(cfg, dict) else {}
@@ -107,7 +107,19 @@ def pct(used: int, cap: int) -> float:
     return round((used / max(1, cap)) * 100, 2)
 
 
-def build_payload(cap_5h: int, cap_7d: int) -> dict[str, Any]:
+def _override_percent(value: Any) -> float | None:
+    if value is None:
+        return None
+    return max(0.0, min(100.0, float(value)))
+
+
+def build_payload(
+    cap_5h: int,
+    cap_7d: int,
+    *,
+    override_5h: float | None = None,
+    override_7d: float | None = None,
+) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     window_5h = timedelta(hours=5)
     window_7d = timedelta(days=7)
@@ -127,20 +139,20 @@ def build_payload(cap_5h: int, cap_7d: int) -> dict[str, Any]:
     return {
         "claude": {
             "primary": {
-                "used_percent": pct(total_5h, cap_5h),
+                "used_percent": override_5h if override_5h is not None else pct(total_5h, cap_5h),
                 "used": total_5h,
                 "cap": cap_5h,
                 "window_minutes": 300,
                 "resets_in_seconds": reset_seconds(earliest_5h, window_5h, now),
-                "source": "claude_jsonl_estimate",
+                "source": "claude_official_override" if override_5h is not None else "claude_jsonl_estimate",
             },
             "secondary": {
-                "used_percent": pct(total_7d, cap_7d),
+                "used_percent": override_7d if override_7d is not None else pct(total_7d, cap_7d),
                 "used": total_7d,
                 "cap": cap_7d,
                 "window_minutes": 10080,
                 "resets_in_seconds": reset_seconds(earliest_7d, window_7d, now),
-                "source": "claude_jsonl_estimate",
+                "source": "claude_official_override" if override_7d is not None else "claude_jsonl_estimate",
             },
         }
     }
@@ -174,7 +186,12 @@ def main() -> None:
     parser.add_argument("--claude-7d-token-cap", type=int, default=int(cfg.get("claude_7d_token_cap", DEFAULT_CLAUDE_7D_TOKEN_CAP)))
     args = parser.parse_args()
 
-    payload = build_payload(args.claude_5h_token_cap, args.claude_7d_token_cap)
+    payload = build_payload(
+        args.claude_5h_token_cap,
+        args.claude_7d_token_cap,
+        override_5h=_override_percent(cfg.get("claude_5h_used_percent")),
+        override_7d=_override_percent(cfg.get("claude_7d_used_percent")),
+    )
     result = post_usage(args.relay, args.secret, payload)
     claude = result.get("usage", {}).get("claude", {})
     h5 = claude.get("h5", {}).get("pct", payload["claude"]["primary"]["used_percent"])
