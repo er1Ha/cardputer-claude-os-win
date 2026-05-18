@@ -238,6 +238,7 @@ def _posted_slot(slot: dict, window_minutes: int) -> dict:
         "reset": reset,
         "window_minutes": int(slot.get("window_minutes", window_minutes) or window_minutes),
         "source": slot.get("source", "posted"),
+        "mode": slot.get("mode", "used"),
     }
 
 

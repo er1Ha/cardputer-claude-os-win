@@ -279,7 +279,8 @@
     const row = win === 'h5' ? rows[0] : rows[1];
     if (!row) return;
     const pct = Math.max(0, Math.min(100, Math.round(side.pct || 0)));
-    row.querySelector('.row-pct').textContent = `${pct}% USED`;
+    const unit = side.mode === 'remaining' ? 'LEFT' : 'USED';
+    row.querySelector('.row-pct').textContent = `${pct}% ${unit}`;
     row.querySelector('.bar > i').style.width = `${pct}%`;
     row.querySelector('.foot').textContent = `RESETS ${(side.reset || '').toUpperCase()}`;
   }

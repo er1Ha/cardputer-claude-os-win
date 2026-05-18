@@ -271,11 +271,14 @@ def resets_in_seconds(side: dict[str, Any]) -> int:
     return max(0, delta)
 
 
-def _percent_override(cfg: dict[str, Any], used_key: str, remaining_key: str) -> float | None:
+def _percent_override(cfg: dict[str, Any], used_key: str, remaining_key: str) -> tuple[float, str] | None:
     if cfg.get(used_key) is not None:
-        return float(cfg[used_key])
+        return float(cfg[used_key]), "used"
     if cfg.get(remaining_key) is not None:
-        return 100.0 - float(cfg[remaining_key])
+        remaining = float(cfg[remaining_key])
+        if cfg.get("codex_display_remaining"):
+            return remaining, "remaining"
+        return 100.0 - remaining, "used"
     return None
 
 
@@ -283,14 +286,19 @@ def usage_slot(
     side: dict[str, Any],
     window_minutes: int,
     *,
-    override: float | None = None,
+    override: tuple[float, str] | None = None,
 ) -> dict[str, Any]:
-    used_percent = override if override is not None else float(side.get("used_percent", 0) or 0)
+    mode = "used"
+    if override is not None:
+        used_percent, mode = override
+    else:
+        used_percent = float(side.get("used_percent", 0) or 0)
     return {
         "used_percent": max(0.0, min(100.0, used_percent)),
         "window_minutes": window_minutes,
         "resets_in_seconds": resets_in_seconds(side),
         "source": "codex_official_override" if override is not None else side.get("source", "codex_rate_limits"),
+        "mode": mode,
     }
 
 
