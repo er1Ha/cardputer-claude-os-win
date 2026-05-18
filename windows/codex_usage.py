@@ -287,19 +287,23 @@ def usage_slot(
     window_minutes: int,
     *,
     override: tuple[float, str] | None = None,
+    reset_label: str | None = None,
 ) -> dict[str, Any]:
     mode = "used"
     if override is not None:
         used_percent, mode = override
     else:
         used_percent = float(side.get("used_percent", 0) or 0)
-    return {
+    slot = {
         "used_percent": max(0.0, min(100.0, used_percent)),
         "window_minutes": window_minutes,
         "resets_in_seconds": resets_in_seconds(side),
         "source": "codex_official_override" if override is not None else side.get("source", "codex_rate_limits"),
         "mode": mode,
     }
+    if reset_label:
+        slot["reset"] = reset_label
+    return slot
 
 
 def build_payload(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -309,10 +313,12 @@ def build_payload(cfg: dict[str, Any]) -> dict[str, Any]:
     use_manual = bool(cfg.get("use_manual_usage_overrides"))
     h5_override = _percent_override(cfg, "codex_5h_used_percent", "codex_5h_remaining_percent") if use_manual else None
     d7_override = _percent_override(cfg, "codex_7d_used_percent", "codex_7d_remaining_percent") if use_manual else None
+    h5_reset_label = str(cfg.get("codex_5h_reset_label") or "")
+    d7_reset_label = str(cfg.get("codex_7d_reset_label") or "")
     return {
         "codex": {
-            "primary": usage_slot(primary, 300, override=h5_override),
-            "secondary": usage_slot(secondary, 10080, override=d7_override),
+            "primary": usage_slot(primary, 300, override=h5_override, reset_label=h5_reset_label),
+            "secondary": usage_slot(secondary, 10080, override=d7_override, reset_label=d7_reset_label),
         }
     }
 
