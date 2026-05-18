@@ -225,7 +225,7 @@ def main() -> None:
     parser.add_argument("--claude-7d-token-cap", type=int, default=int(cfg.get("claude_7d_token_cap", DEFAULT_CLAUDE_7D_TOKEN_CAP)))
     args = parser.parse_args()
 
-    use_manual = bool(cfg.get("use_manual_usage_overrides"))
+    use_manual = bool(cfg.get("claude_use_manual_usage_overrides", cfg.get("use_manual_usage_overrides")))
     payload = payload_from_statusline(int(cfg.get("claude_status_max_age_seconds", 3600))) or build_payload(
         args.claude_5h_token_cap,
         args.claude_7d_token_cap,
