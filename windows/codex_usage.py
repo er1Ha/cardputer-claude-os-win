@@ -70,6 +70,10 @@ def _app_server_request(timeout_seconds: int = 12) -> dict[str, Any] | None:
     exe = _codex_command()
     if not exe:
         return None
+    # CREATE_NO_WINDOW (0x08000000) keeps codex.exe from flashing a
+    # console window each time Task Scheduler triggers us. Falls back
+    # to 0 on non-Windows so the same code runs on macOS.
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         proc = subprocess.Popen(
             [exe, "app-server"],
@@ -79,6 +83,7 @@ def _app_server_request(timeout_seconds: int = 12) -> dict[str, Any] | None:
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=creationflags,
         )
     except OSError:
         return None

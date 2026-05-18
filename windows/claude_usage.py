@@ -316,9 +316,11 @@ def _claude_code_version() -> str:
     bypasses 429 throttling that other UAs hit on this endpoint."""
     try:
         import subprocess
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         out = subprocess.run(
             ["claude", "--version"],
             capture_output=True, text=True, timeout=3,
+            creationflags=creationflags,
         ).stdout.strip()
         import re
         m = re.match(r"^(\d+\.\d+\.\d+)", out)
