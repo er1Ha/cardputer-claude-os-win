@@ -31,6 +31,7 @@ import {
   handleFilesList,
   handleStream,
 } from "./console_routes.js";
+import { handleGetUsage, handlePostUsage } from "./usage.js";
 
 export { SessionRouter } from "./router.do.js";
 
@@ -226,6 +227,9 @@ const PAGER_ROUTES = {
   "POST /console/delete": handleDelete,
   "POST /console/rename": handleRename,
   "POST /console/confirm": handleConfirm,
+
+  "GET /usage": handleGetUsage,
+  "POST /usage": handlePostUsage,
 };
 
 export default {
