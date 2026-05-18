@@ -55,7 +55,11 @@ $h = @{ "x-device-secret" = "<your-secret>"; "content-type" = "application/json"
 # Usage dashboard data
 Invoke-RestMethod -Uri http://127.0.0.1:8787/usage -Headers $h | ConvertTo-Json -Depth 4
 
-# Push current Codex and Claude usage into the relay cache
+# Push current Codex and Claude usage into the relay cache.
+# Codex reads the local official log DB first, then rollout JSONL.
+# Claude reads ~/.claude/usage-status.json first if the statusLine
+# capture wrapper has populated it, then falls back to local JSONL
+# token estimation.
 py ..\windows\codex_usage.py --relay http://127.0.0.1:8787 --secret "<your-secret>"
 py ..\windows\claude_usage.py --relay http://127.0.0.1:8787 --secret "<your-secret>"
 
@@ -114,17 +118,27 @@ scripts also read:
   "claude_5h_used_percent": 0,
   "claude_7d_used_percent": 28,
   "codex_5h_remaining_percent": 84,
-  "codex_7d_remaining_percent": 73
+  "codex_7d_remaining_percent": 73,
+  "use_manual_usage_overrides": false
 }
 ```
 
 The `*_used_percent` and `*_remaining_percent` fields are optional
 manual overrides for matching the official account pages. Codex's
 official status page reports remaining quota, so the script converts
-remaining percent to the UI's `USED` percent.
+remaining percent to the UI's `USED` percent. They are ignored unless
+`use_manual_usage_overrides` is `true`.
 
-Codex numbers come straight from the CLI's own log unless the optional
-official-page override fields are present.
+For more precise Claude Code usage, install
+`windows/claude_statusline_capture.py` as the Claude Code status line
+command. It captures the official `rate_limits` JSON to
+`~/.claude/usage-status.json` and delegates to the previous status line
+command if one is configured. `windows/claude_usage.py` prefers that
+file over token estimation.
+
+Codex numbers come from the official local Codex event stream in
+`~/.codex/logs_2.sqlite`, falling back to
+`~/.codex/sessions/**/rollout-*.jsonl`.
 
 ## Firewall
 

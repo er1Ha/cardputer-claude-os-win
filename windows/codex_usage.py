@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import ssl
 import sys
 import urllib.error
@@ -20,6 +21,7 @@ from typing import Any
 
 CONFIG_PATH = Path("~/.config/claude-pager/config.json").expanduser()
 CODEX_SESSIONS = Path("~/.codex/sessions").expanduser()
+CODEX_LOG_DB = Path("~/.codex/logs_2.sqlite").expanduser()
 TIMEOUT = 20
 
 
@@ -48,7 +50,82 @@ def parse_event_ts(value: Any, fallback: float) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def latest_codex_rate_limits() -> dict[str, Any] | None:
+def _extract_json_object(text: str, marker: str) -> dict[str, Any] | None:
+    idx = text.find(marker)
+    if idx < 0:
+        return None
+    start = text.find("{", idx)
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for pos in range(start, len(text)):
+        ch = text[pos]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : pos + 1])
+                    except json.JSONDecodeError:
+                        return None
+    return None
+
+
+def _normalize_rate_limits(raw: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(raw)
+    for key in ("primary", "secondary"):
+        side = normalized.get(key)
+        if not isinstance(side, dict):
+            continue
+        if "resets_at" not in side and "reset_at" in side:
+            side["resets_at"] = side["reset_at"]
+        if "resets_at" not in side and "reset_after_seconds" in side:
+            side["resets_at"] = datetime.now(timezone.utc).timestamp() + float(side["reset_after_seconds"])
+    return normalized
+
+
+def latest_codex_rate_limits_from_sqlite() -> dict[str, Any] | None:
+    if not CODEX_LOG_DB.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{CODEX_LOG_DB}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        rows = conn.execute(
+            """
+            select feedback_log_body
+            from logs
+            where feedback_log_body like '%"rate_limits"%'
+            order by id desc
+            limit 500
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    for (body,) in rows:
+        rate_limits = _extract_json_object(body or "", '"rate_limits"')
+        if isinstance(rate_limits, dict) and isinstance(rate_limits.get("primary"), dict):
+            return _normalize_rate_limits(rate_limits)
+    return None
+
+
+def latest_codex_rate_limits_from_rollouts() -> dict[str, Any] | None:
     if not CODEX_SESSIONS.exists():
         return None
     newest: tuple[datetime, dict[str, Any]] | None = None
@@ -71,7 +148,11 @@ def latest_codex_rate_limits() -> dict[str, Any] | None:
                 ts = parse_event_ts(obj.get("timestamp"), mtime)
                 if newest is None or ts > newest[0]:
                     newest = (ts, rate_limits)
-    return newest[1] if newest else None
+    return _normalize_rate_limits(newest[1]) if newest else None
+
+
+def latest_codex_rate_limits() -> dict[str, Any] | None:
+    return latest_codex_rate_limits_from_sqlite() or latest_codex_rate_limits_from_rollouts()
 
 
 def resets_in_seconds(side: dict[str, Any]) -> int:
@@ -109,8 +190,9 @@ def build_payload(cfg: dict[str, Any]) -> dict[str, Any]:
     rate_limits = latest_codex_rate_limits() or {}
     primary = rate_limits.get("primary") if isinstance(rate_limits.get("primary"), dict) else {}
     secondary = rate_limits.get("secondary") if isinstance(rate_limits.get("secondary"), dict) else {}
-    h5_override = _percent_override(cfg, "codex_5h_used_percent", "codex_5h_remaining_percent")
-    d7_override = _percent_override(cfg, "codex_7d_used_percent", "codex_7d_remaining_percent")
+    use_manual = bool(cfg.get("use_manual_usage_overrides"))
+    h5_override = _percent_override(cfg, "codex_5h_used_percent", "codex_5h_remaining_percent") if use_manual else None
+    d7_override = _percent_override(cfg, "codex_7d_used_percent", "codex_7d_remaining_percent") if use_manual else None
     return {
         "codex": {
             "primary": usage_slot(primary, 300, override=h5_override),

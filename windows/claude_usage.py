@@ -21,6 +21,7 @@ from typing import Any
 
 CONFIG_PATH = Path("~/.config/claude-pager/config.json").expanduser()
 CLAUDE_PROJECTS = Path("~/.claude/projects").expanduser()
+CLAUDE_STATUS_PATH = Path("~/.claude/usage-status.json").expanduser()
 DEFAULT_CLAUDE_5H_TOKEN_CAP = 2_000_000
 DEFAULT_CLAUDE_7D_TOKEN_CAP = 205_000
 TIMEOUT = 20
@@ -113,6 +114,44 @@ def _override_percent(value: Any) -> float | None:
     return max(0.0, min(100.0, float(value)))
 
 
+def _status_slot(side: dict[str, Any], window_minutes: int) -> dict[str, Any]:
+    resets_in = int(side.get("resets_in_seconds", 0) or 0)
+    used = float(side.get("used_percent", side.get("used_percentage", 0)) or 0)
+    return {
+        "used_percent": max(0.0, min(100.0, used)),
+        "used": side.get("used"),
+        "cap": side.get("cap"),
+        "window_minutes": int(side.get("window_minutes", window_minutes) or window_minutes),
+        "resets_in_seconds": max(0, resets_in),
+        "source": "claude_statusline_rate_limits",
+    }
+
+
+def payload_from_statusline(max_age_seconds: int = 3600) -> dict[str, Any] | None:
+    if not CLAUDE_STATUS_PATH.exists():
+        return None
+    try:
+        data = json.loads(CLAUDE_STATUS_PATH.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    captured = parse_ts(data.get("captured_at"))
+    if captured is None:
+        return None
+    age = (datetime.now(timezone.utc) - captured).total_seconds()
+    if age < 0 or age > max_age_seconds:
+        return None
+    primary = data.get("primary")
+    secondary = data.get("secondary")
+    if not isinstance(primary, dict) and not isinstance(secondary, dict):
+        return None
+    claude: dict[str, Any] = {}
+    if isinstance(primary, dict):
+        claude["primary"] = _status_slot(primary, 300)
+    if isinstance(secondary, dict):
+        claude["secondary"] = _status_slot(secondary, 10080)
+    return {"claude": claude}
+
+
 def build_payload(
     cap_5h: int,
     cap_7d: int,
@@ -186,11 +225,12 @@ def main() -> None:
     parser.add_argument("--claude-7d-token-cap", type=int, default=int(cfg.get("claude_7d_token_cap", DEFAULT_CLAUDE_7D_TOKEN_CAP)))
     args = parser.parse_args()
 
-    payload = build_payload(
+    use_manual = bool(cfg.get("use_manual_usage_overrides"))
+    payload = payload_from_statusline(int(cfg.get("claude_status_max_age_seconds", 3600))) or build_payload(
         args.claude_5h_token_cap,
         args.claude_7d_token_cap,
-        override_5h=_override_percent(cfg.get("claude_5h_used_percent")),
-        override_7d=_override_percent(cfg.get("claude_7d_used_percent")),
+        override_5h=_override_percent(cfg.get("claude_5h_used_percent")) if use_manual else None,
+        override_7d=_override_percent(cfg.get("claude_7d_used_percent")) if use_manual else None,
     )
     result = post_usage(args.relay, args.secret, payload)
     claude = result.get("usage", {}).get("claude", {})
