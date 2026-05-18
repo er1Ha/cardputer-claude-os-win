@@ -204,8 +204,22 @@ the BLE wire format lives in
 
 ## Quick start — Push to Claude (voice + chat)
 
-The voice app needs a Cloudflare Worker you control. Roughly 10 minutes
-of one-time setup; after that every voice/text turn is a single tap.
+The voice app needs a backend that speaks the same protocol Push-to-Claude
+expects (`POST /ask`, `/ask-text`, `/reset`). You have two choices:
+
+- **Cloudflare Worker** (default) — pay-as-you-go API billing against
+  your Anthropic + OpenAI keys. ~10 min setup. See
+  [`worker/README.md`](worker/README.md).
+- **Local relay on your PC** — runs entirely on your laptop / desktop,
+  shells out to the `claude` / `codex` CLIs you already use, so every
+  chat turn consumes your **Pro/Max subscription quota** instead of API
+  credit. Adds a `/codex` endpoint and a `/usage` endpoint that surfaces
+  the 5h / 7d windows shown on the Cardputer dashboard. Windows only
+  right now. See [`local_relay/README.md`](local_relay/README.md).
+
+The rest of this section assumes the Worker path; swap in your relay's
+LAN URL (`http://192.168.x.y:8787`) anywhere you see `WORKER_BASE` if
+you went the local route.
 
 1. Deploy the Worker — follow [`worker/README.md`](worker/README.md). You'll end up with a Worker URL and a `DEVICE_SECRET` you generated.
 2. Point the device at it:

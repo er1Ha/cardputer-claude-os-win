@@ -9,7 +9,15 @@ values.
 
 # Base URL of YOUR deployed Cloudflare Worker, e.g.
 #   "https://push-to-claude.<your-subdomain>.workers.dev"
-# No trailing slash; the app appends "/ask", "/ask-text", "/reset".
+#
+# Alternatively, point at the local_relay running on your PC so chat
+# consumes your Claude Pro/Max + ChatGPT subscription quota instead
+# of pay-as-you-go API credit:
+#   "http://192.168.1.10:8787"          # your PC's LAN IP, port 8787
+# See local_relay/README.md.
+#
+# No trailing slash; the app appends "/ask", "/ask-text", "/reset",
+# "/codex", "/usage".
 WORKER_BASE = ""
 
 # Shared secret between this device and the Worker. Must match the
