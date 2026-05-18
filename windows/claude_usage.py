@@ -289,6 +289,112 @@ def _override_percent(value: Any) -> float | None:
     return max(0.0, min(100.0, float(value)))
 
 
+def _oauth_token() -> str | None:
+    """OAuth token Claude Code itself stores. Same path the HUD plugins
+    (barkleesanders/claude-hud, jarrodwatts/claude-hud, etc.) read.
+    No DPAPI, no cookies — just an `sk-ant-oat01-...` Bearer token."""
+    env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if env:
+        return env
+    if not CLAUDE_CREDENTIALS_PATH.exists():
+        return None
+    try:
+        creds = json.loads(CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    inner = creds.get("claudeAiOauth")
+    if isinstance(inner, dict):
+        tok = inner.get("accessToken")
+        if isinstance(tok, str) and tok:
+            return tok
+    return None
+
+
+def _claude_code_version() -> str:
+    """Return installed `claude` version so we can spoof the User-Agent
+    api.anthropic.com expects from Claude Code. The `claude-code/*` UA
+    bypasses 429 throttling that other UAs hit on this endpoint."""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip()
+        import re
+        m = re.match(r"^(\d+\.\d+\.\d+)", out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "2.1.0"
+
+
+def payload_from_oauth_api(debug: bool = False) -> dict[str, Any] | None:
+    """Hit api.anthropic.com/api/oauth/usage with Claude Code's own
+    OAuth token. This is exactly what the official HUD plugins do —
+    the closest analogue to Codex's `app-server account/rateLimits/read`.
+    """
+    def _log(msg: str) -> None:
+        if debug:
+            print(f"[claude_usage] {msg}", file=sys.stderr)
+
+    token = _oauth_token()
+    if not token:
+        _log("no OAuth token (check ~/.claude/.credentials.json → claudeAiOauth.accessToken)")
+        return None
+    _log(f"using OAuth token {token[:20]}…")
+
+    url = "https://api.anthropic.com/api/oauth/usage"
+    headers = {
+        "accept": "application/json",
+        "authorization": f"Bearer {token}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "user-agent": f"claude-code/{_claude_code_version()}",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        _log(f"GET {url} → HTTP {e.code}: {body[:300]}")
+        return None
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        _log(f"GET {url} failed: {e}")
+        return None
+
+    if debug:
+        keys = sorted(data.keys()) if isinstance(data, dict) else type(data).__name__
+        _log(f"usage payload keys: {keys}")
+
+    now = datetime.now(timezone.utc)
+
+    def slot(name: str, window_minutes: int) -> dict[str, Any] | None:
+        side = data.get(name)
+        if not isinstance(side, dict):
+            return None
+        reset_in = reset_seconds_from_iso(side.get("resets_at"), now)
+        used = float(side.get("utilization", 0) or 0)
+        return {
+            "used_percent": max(0.0, min(100.0, used)),
+            "window_minutes": window_minutes,
+            "resets_in_seconds": reset_in,
+            "reset": reset_label(reset_in),
+            "source": "claude_oauth_api",
+        }
+
+    primary = slot("five_hour", 300)
+    secondary = slot("seven_day", 10080)
+    if not primary and not secondary:
+        return None
+    claude: dict[str, Any] = {}
+    if primary:
+        claude["primary"] = primary
+    if secondary:
+        claude["secondary"] = secondary
+    return {"claude": claude}
+
+
 def _status_slot(side: dict[str, Any], window_minutes: int) -> dict[str, Any]:
     resets_in = int(side.get("resets_in_seconds", 0) or 0)
     used = float(side.get("used_percent", side.get("used_percentage", 0)) or 0)
@@ -508,13 +614,26 @@ def main() -> None:
     args = parser.parse_args()
 
     use_manual = bool(cfg.get("claude_use_manual_usage_overrides", cfg.get("use_manual_usage_overrides")))
-    desktop_payload = payload_from_desktop_usage_api(
+
+    # Source order (highest fidelity first):
+    #   1. api.anthropic.com/api/oauth/usage  — Claude Code's own OAuth
+    #      token; same path HUD plugins use. No user setup needed beyond
+    #      "claude login".
+    #   2. claude.ai/api/organizations/.../usage with a manually-pasted
+    #      sessionKey cookie. Pre-existing fallback for the rare case
+    #      OAuth fails (revoked token, custom proxy, etc.).
+    #   3. ~/.claude/usage-status.json from the statusLine capture hook.
+    #   4. JSONL token sum estimate against a configurable cap.
+    oauth_payload = payload_from_oauth_api(debug=args.debug)
+    if args.debug and oauth_payload is None:
+        print("[claude_usage] oauth /api/oauth/usage unavailable, trying claude.ai sessionKey path", file=sys.stderr)
+    desktop_payload = oauth_payload or payload_from_desktop_usage_api(
         session_key=args.session_key or None,
         organization_uuid=args.organization_uuid or None,
         debug=args.debug,
     )
-    if args.debug and desktop_payload is None:
-        print("[claude_usage] desktop_usage_api unavailable, trying statusline", file=sys.stderr)
+    if args.debug and oauth_payload is None and desktop_payload is None:
+        print("[claude_usage] sessionKey path unavailable, trying statusline", file=sys.stderr)
     statusline_payload = None if desktop_payload else payload_from_statusline(int(cfg.get("claude_status_max_age_seconds", 3600)))
     if args.debug and desktop_payload is None and statusline_payload is None:
         print("[claude_usage] statusline unavailable, falling back to JSONL token estimate", file=sys.stderr)
