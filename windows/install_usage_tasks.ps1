@@ -14,7 +14,7 @@ param(
     [string]$RelayUrl     = "http://127.0.0.1:8787",
     [string]$DeviceSecret = "",
     [string]$RepoRoot     = (Split-Path -Parent $PSScriptRoot),
-    [string]$Python       = "py"
+    [string]$Python       = "pyw"
 )
 
 if (-not $DeviceSecret) {
