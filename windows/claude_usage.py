@@ -9,8 +9,12 @@ POSTs the result to /usage.
 from __future__ import annotations
 
 import argparse
+import base64
+import ctypes
+import ctypes.wintypes as wt
 import json
 import os
+import sqlite3
 import ssl
 import sys
 import urllib.error
@@ -22,9 +26,17 @@ from typing import Any
 CONFIG_PATH = Path("~/.config/claude-pager/config.json").expanduser()
 CLAUDE_PROJECTS = Path("~/.claude/projects").expanduser()
 CLAUDE_STATUS_PATH = Path("~/.claude/usage-status.json").expanduser()
+CLAUDE_CREDENTIALS_PATH = Path("~/.claude/.credentials.json").expanduser()
+CLAUDE_DESKTOP_DIR = Path(os.environ.get("APPDATA", "")) / "Claude"
+CLAUDE_DESKTOP_LOCAL_STATE = CLAUDE_DESKTOP_DIR / "Local State"
+CLAUDE_DESKTOP_COOKIES = CLAUDE_DESKTOP_DIR / "Network" / "Cookies"
 DEFAULT_CLAUDE_5H_TOKEN_CAP = 2_000_000
 DEFAULT_CLAUDE_7D_TOKEN_CAP = 205_000
 TIMEOUT = 20
+
+
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
 
 
 def die(msg: str, code: int = 2) -> None:
@@ -40,6 +52,107 @@ def load_config() -> dict[str, Any]:
     except json.JSONDecodeError as e:
         die(f"invalid JSON in {CONFIG_PATH}: {e}")
     return cfg if isinstance(cfg, dict) else {}
+
+
+def _dpapi_decrypt(blob: bytes) -> bytes:
+    inbuf = ctypes.create_string_buffer(blob, len(blob))
+    inblob = _DataBlob(len(blob), ctypes.cast(inbuf, ctypes.POINTER(ctypes.c_byte)))
+    outblob = _DataBlob()
+    ok = ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(inblob), None, None, None, None, 0, ctypes.byref(outblob)
+    )
+    if not ok:
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(outblob.pbData, outblob.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(outblob.pbData)
+
+
+def _desktop_master_key() -> bytes | None:
+    if not CLAUDE_DESKTOP_LOCAL_STATE.exists():
+        return None
+    try:
+        state = json.loads(CLAUDE_DESKTOP_LOCAL_STATE.read_text(encoding="utf-8-sig"))
+        encrypted = base64.b64decode(state["os_crypt"]["encrypted_key"])
+        if encrypted.startswith(b"DPAPI"):
+            encrypted = encrypted[5:]
+        return _dpapi_decrypt(encrypted)
+    except Exception:
+        return None
+
+
+def _decrypt_chrome_value(encrypted_value: bytes, key: bytes) -> str:
+    if encrypted_value.startswith((b"v10", b"v11")):
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        except ImportError as e:
+            raise RuntimeError("cryptography package is required for Claude Desktop cookie decryption") from e
+        plain = AESGCM(key).decrypt(encrypted_value[3:15], encrypted_value[15:], None)
+        # Chromium 130+ prefixes cookie plaintext with SHA256(host_key).
+        if len(plain) > 32:
+            try:
+                return plain[32:].decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+        return plain.decode("utf-8")
+    return _dpapi_decrypt(encrypted_value).decode("utf-8")
+
+
+def _claude_desktop_cookies() -> str | None:
+    if not CLAUDE_DESKTOP_COOKIES.exists():
+        return None
+    key = _desktop_master_key()
+    if not key:
+        return None
+    wanted = {
+        "__cf_bm",
+        "__ssid",
+        "anthropic-device-id",
+        "cf_clearance",
+        "lastActiveOrg",
+        "sessionKey",
+        "sessionKeyLC",
+    }
+    try:
+        conn = sqlite3.connect(CLAUDE_DESKTOP_COOKIES.as_uri() + "?mode=ro", uri=True, timeout=2)
+        rows = conn.execute(
+            """
+            select name, value, encrypted_value
+            from cookies
+            where host_key like '%claude.ai%'
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    parts: list[str] = []
+    for name, value, encrypted_value in rows:
+        if name not in wanted:
+            continue
+        try:
+            cookie_value = value or _decrypt_chrome_value(bytes(encrypted_value), key)
+            cookie_value.encode("latin-1")
+        except Exception:
+            continue
+        if cookie_value:
+            parts.append(f"{name}={cookie_value}")
+    return "; ".join(parts) if parts else None
+
+
+def _organization_uuid() -> str | None:
+    if not CLAUDE_CREDENTIALS_PATH.exists():
+        return None
+    try:
+        creds = json.loads(CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    org = creds.get("organizationUuid")
+    return org if isinstance(org, str) and org else None
 
 
 def parse_ts(value: Any) -> datetime | None:
@@ -104,6 +217,23 @@ def reset_seconds(earliest: datetime | None, window: timedelta, now: datetime) -
     return max(0, int(((earliest + window) - now).total_seconds()))
 
 
+def reset_seconds_from_iso(value: Any, now: datetime) -> int:
+    dt = parse_ts(value)
+    if dt is None:
+        return 0
+    return max(0, int((dt - now).total_seconds()))
+
+
+def reset_label(seconds: int) -> str:
+    if seconds <= 0:
+        return "now"
+    minutes = (seconds + 59) // 60
+    hours, mins = divmod(minutes, 60)
+    if hours:
+        return f"in {hours} hr {mins} min"
+    return f"in {mins} min"
+
+
 def pct(used: int, cap: int) -> float:
     return round((used / max(1, cap)) * 100, 2)
 
@@ -125,6 +255,57 @@ def _status_slot(side: dict[str, Any], window_minutes: int) -> dict[str, Any]:
         "resets_in_seconds": max(0, resets_in),
         "source": "claude_statusline_rate_limits",
     }
+
+
+def payload_from_desktop_usage_api() -> dict[str, Any] | None:
+    org = _organization_uuid()
+    cookies = _claude_desktop_cookies()
+    if not org or not cookies:
+        return None
+    url = f"https://claude.ai/api/organizations/{org}/usage"
+    headers = {
+        "accept": "application/json,text/plain,*/*",
+        "cookie": cookies,
+        "origin": "https://claude.ai",
+        "referer": "https://claude.ai/settings/usage",
+        "user-agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Claude/1.7196.0 Chrome/142.0.7444.200 Electron/41.5.0 Safari/537.36"
+        ),
+        "x-requested-with": "XMLHttpRequest",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
+        return None
+    now = datetime.now(timezone.utc)
+
+    def slot(name: str, window_minutes: int) -> dict[str, Any] | None:
+        side = data.get(name)
+        if not isinstance(side, dict):
+            return None
+        reset_in = reset_seconds_from_iso(side.get("resets_at"), now)
+        used = float(side.get("utilization", 0) or 0)
+        return {
+            "used_percent": max(0.0, min(100.0, used)),
+            "window_minutes": window_minutes,
+            "resets_in_seconds": reset_in,
+            "reset": reset_label(reset_in),
+            "source": "claude_desktop_usage_api",
+        }
+
+    primary = slot("five_hour", 300)
+    secondary = slot("seven_day", 10080)
+    if not primary and not secondary:
+        return None
+    claude: dict[str, Any] = {}
+    if primary:
+        claude["primary"] = primary
+    if secondary:
+        claude["secondary"] = secondary
+    return {"claude": claude}
 
 
 def _with_reset_label(slot: dict[str, Any], label: str) -> dict[str, Any]:
@@ -237,13 +418,17 @@ def main() -> None:
     args = parser.parse_args()
 
     use_manual = bool(cfg.get("claude_use_manual_usage_overrides", cfg.get("use_manual_usage_overrides")))
-    payload = payload_from_statusline(int(cfg.get("claude_status_max_age_seconds", 3600))) or build_payload(
+    payload = (
+        payload_from_desktop_usage_api()
+        or payload_from_statusline(int(cfg.get("claude_status_max_age_seconds", 3600)))
+        or build_payload(
         args.claude_5h_token_cap,
         args.claude_7d_token_cap,
         override_5h=_override_percent(cfg.get("claude_5h_used_percent")) if use_manual else None,
         override_7d=_override_percent(cfg.get("claude_7d_used_percent")) if use_manual else None,
         reset_label_5h=str(cfg.get("claude_5h_reset_label") or ""),
         reset_label_7d=str(cfg.get("claude_7d_reset_label") or ""),
+        )
     )
     result = post_usage(args.relay, args.secret, payload)
     claude = result.get("usage", {}).get("claude", {})
