@@ -288,12 +288,16 @@ def usage_slot(
     *,
     override: tuple[float, str] | None = None,
     reset_label: str | None = None,
+    display_remaining: bool = False,
 ) -> dict[str, Any]:
     mode = "used"
     if override is not None:
         used_percent, mode = override
     else:
         used_percent = float(side.get("used_percent", 0) or 0)
+        if display_remaining:
+            used_percent = 100.0 - used_percent
+            mode = "remaining"
     slot = {
         "used_percent": max(0.0, min(100.0, used_percent)),
         "window_minutes": window_minutes,
@@ -315,10 +319,23 @@ def build_payload(cfg: dict[str, Any]) -> dict[str, Any]:
     d7_override = _percent_override(cfg, "codex_7d_used_percent", "codex_7d_remaining_percent") if use_manual else None
     h5_reset_label = str(cfg.get("codex_5h_reset_label") or "")
     d7_reset_label = str(cfg.get("codex_7d_reset_label") or "")
+    display_remaining = bool(cfg.get("codex_display_remaining"))
     return {
         "codex": {
-            "primary": usage_slot(primary, 300, override=h5_override, reset_label=h5_reset_label),
-            "secondary": usage_slot(secondary, 10080, override=d7_override, reset_label=d7_reset_label),
+            "primary": usage_slot(
+                primary,
+                300,
+                override=h5_override,
+                reset_label=h5_reset_label,
+                display_remaining=display_remaining,
+            ),
+            "secondary": usage_slot(
+                secondary,
+                10080,
+                override=d7_override,
+                reset_label=d7_reset_label,
+                display_remaining=display_remaining,
+            ),
         }
     }
 
