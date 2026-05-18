@@ -338,10 +338,14 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return self.headers.get("x-device-secret") == SECRET
 
+    def _loopback_usage(self) -> bool:
+        host = self.client_address[0] if self.client_address else ""
+        return self.path == "/usage" and host in ("127.0.0.1", "::1", "localhost")
+
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
             return self._send(200, {"ok": True})
-        if not self._auth():
+        if not self._auth() and not self._loopback_usage():
             return self._send(401, {"error": "unauthorized"})
         if self.path == "/usage":
             try:
@@ -352,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global USAGE_OVERRIDES
-        if not self._auth():
+        if not self._auth() and not self._loopback_usage():
             return self._send(401, {"error": "unauthorized"})
         length = int(self.headers.get("content-length") or 0)
         raw = self.rfile.read(length) if length else b""
