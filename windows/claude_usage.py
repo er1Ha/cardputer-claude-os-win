@@ -127,6 +127,13 @@ def _status_slot(side: dict[str, Any], window_minutes: int) -> dict[str, Any]:
     }
 
 
+def _with_reset_label(slot: dict[str, Any], label: str) -> dict[str, Any]:
+    if label:
+        slot = dict(slot)
+        slot["reset"] = label
+    return slot
+
+
 def payload_from_statusline(max_age_seconds: int = 3600) -> dict[str, Any] | None:
     if not CLAUDE_STATUS_PATH.exists():
         return None
@@ -158,6 +165,8 @@ def build_payload(
     *,
     override_5h: float | None = None,
     override_7d: float | None = None,
+    reset_label_5h: str = "",
+    reset_label_7d: str = "",
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     window_5h = timedelta(hours=5)
@@ -175,24 +184,26 @@ def build_payload(
         if ts >= cutoff_5h:
             total_5h += tokens
             earliest_5h = ts if earliest_5h is None or ts < earliest_5h else earliest_5h
+    primary = {
+        "used_percent": override_5h if override_5h is not None else pct(total_5h, cap_5h),
+        "used": total_5h,
+        "cap": cap_5h,
+        "window_minutes": 300,
+        "resets_in_seconds": reset_seconds(earliest_5h, window_5h, now),
+        "source": "claude_official_override" if override_5h is not None else "claude_jsonl_estimate",
+    }
+    secondary = {
+        "used_percent": override_7d if override_7d is not None else pct(total_7d, cap_7d),
+        "used": total_7d,
+        "cap": cap_7d,
+        "window_minutes": 10080,
+        "resets_in_seconds": reset_seconds(earliest_7d, window_7d, now),
+        "source": "claude_official_override" if override_7d is not None else "claude_jsonl_estimate",
+    }
     return {
         "claude": {
-            "primary": {
-                "used_percent": override_5h if override_5h is not None else pct(total_5h, cap_5h),
-                "used": total_5h,
-                "cap": cap_5h,
-                "window_minutes": 300,
-                "resets_in_seconds": reset_seconds(earliest_5h, window_5h, now),
-                "source": "claude_official_override" if override_5h is not None else "claude_jsonl_estimate",
-            },
-            "secondary": {
-                "used_percent": override_7d if override_7d is not None else pct(total_7d, cap_7d),
-                "used": total_7d,
-                "cap": cap_7d,
-                "window_minutes": 10080,
-                "resets_in_seconds": reset_seconds(earliest_7d, window_7d, now),
-                "source": "claude_official_override" if override_7d is not None else "claude_jsonl_estimate",
-            },
+            "primary": _with_reset_label(primary, reset_label_5h),
+            "secondary": _with_reset_label(secondary, reset_label_7d),
         }
     }
 
@@ -231,6 +242,8 @@ def main() -> None:
         args.claude_7d_token_cap,
         override_5h=_override_percent(cfg.get("claude_5h_used_percent")) if use_manual else None,
         override_7d=_override_percent(cfg.get("claude_7d_used_percent")) if use_manual else None,
+        reset_label_5h=str(cfg.get("claude_5h_reset_label") or ""),
+        reset_label_7d=str(cfg.get("claude_7d_reset_label") or ""),
     )
     result = post_usage(args.relay, args.secret, payload)
     claude = result.get("usage", {}).get("claude", {})
