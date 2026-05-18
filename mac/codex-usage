@@ -185,10 +185,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    body = {k: v for k, v in hit.items() if v}
-    if not body:
+    buckets = {k: v for k, v in hit.items() if v}
+    if not buckets:
         print("rate_limits found but all buckets empty", file=sys.stderr)
         return 1
+    body = {"codex": buckets}
     resp = post_usage(cfg, body)
     print(json.dumps(resp or body, indent=2))
     return 0

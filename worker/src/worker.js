@@ -31,7 +31,11 @@ import {
   handleFilesList,
   handleStream,
 } from "./console_routes.js";
-import { handleGetUsage, handlePostUsage } from "./usage.js";
+import {
+  handleGetUsage,
+  handlePostUsage,
+  handleUsagePreflight,
+} from "./usage.js";
 
 export { SessionRouter } from "./router.do.js";
 
@@ -258,6 +262,12 @@ export default {
       (url.pathname === "/console" || url.pathname === "/console/")
     ) {
       return handleConsolePage();
+    }
+
+    // CORS preflight for /usage (the LIVE preview page hits this
+    // from file:// and triggers an OPTIONS request).
+    if (request.method === "OPTIONS" && url.pathname === "/usage") {
+      return handleUsagePreflight();
     }
 
     if (PAGER_ROUTES[key]) {
