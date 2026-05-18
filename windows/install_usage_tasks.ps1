@@ -53,7 +53,8 @@ function Register-UsageTask {
                   -DontStopIfGoingOnBatteries `
                   -StartWhenAvailable `
                   -MultipleInstances IgnoreNew `
-                  -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+                  -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
+                  -Hidden
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
     Register-ScheduledTask -TaskName $Name `
