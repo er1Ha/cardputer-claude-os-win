@@ -458,8 +458,12 @@ class BuddyUI:
             return _pct(hb.get(key))
         if prefix == "claude" and window == "5h":
             return _pct(hb.get("tokens_today", 0), hb.get("tokens_daily_cap", 200000))
+        if prefix == "claude" and window == "7d":
+            return _pct(hb.get("tokens_week", 0), hb.get("tokens_weekly_cap", 1_400_000))
         if prefix == "codex" and window == "5h":
             return _pct(hb.get("tokens", 0), hb.get("tokens_turn_cap", 50000))
+        if prefix == "codex" and window == "7d":
+            return _pct(hb.get("tokens_week", 0), hb.get("tokens_weekly_cap", 350_000))
         return 0
 
     def _usage_reset(self, hb: dict, prefix: str, window: str, fallback: str) -> str:

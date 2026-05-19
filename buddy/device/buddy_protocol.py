@@ -12,7 +12,7 @@ Host → device messages (what we receive):
     {"cmd":"unpair"}                             - wipe pairing + state
     {"cmd":"char_begin"|"file"|"chunk"|...}      - folder push
     heartbeat, no "cmd": {"total":N, "running":N, "waiting":N,
-        "msg":"...", "entries":N, "tokens":N, "tokens_today":N,
+        "msg":"...", "entries":N, "tokens":N, "tokens_today":N, "tokens_week":N,
         "prompt":{"id":"...","tool":"...","hint":"..."}}
 
 Device → host messages (what we emit):
@@ -33,7 +33,7 @@ import time
 
 FIRMWARE_VERSION = "m5buddy-0.1"
 
-_HEARTBEAT_FIELDS = ("total", "running", "waiting", "tokens", "tokens_today", "entries")
+_HEARTBEAT_FIELDS = ("total", "running", "waiting", "tokens", "tokens_today", "tokens_week", "entries")
 
 # Unpair is destructive (wipes name/owner/stats and disconnects). The
 # BLE link on UIFlow 2.0 is unauthenticated — see buddy_ble.py — so any
