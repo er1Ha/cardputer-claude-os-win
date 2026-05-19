@@ -152,6 +152,14 @@
     font: 11px/1 ui-monospace, monospace;
     color: #888;
     letter-spacing: 1px;
+    min-height: 12px;
+    text-align: center;
+  }
+  #status {
+    display: inline-block;
+    min-width: 520px;
+    text-align: left;
+    vertical-align: top;
   }
 </style>
 </head>
@@ -269,6 +277,8 @@
   const $url = document.getElementById('relayUrl');
   const $sec = document.getElementById('relaySecret');
   const $status = document.getElementById('status');
+  const POLL_INTERVAL_MS = 60_000;
+  let lastPayload = '';
   $url.value = localStorage.getItem(LS_URL) || 'http://127.0.0.1:8787';
   $sec.value = localStorage.getItem(LS_SEC) || '';
 
@@ -280,27 +290,36 @@
     if (!row) return;
     const pct = Math.max(0, Math.min(100, Math.round(side.pct || 0)));
     const unit = side.mode === 'remaining' ? 'LEFT' : 'USED';
-    row.querySelector('.row-pct').textContent = `${pct}% ${unit}`;
-    row.querySelector('.bar > i').style.width = `${pct}%`;
+    const pctEl = row.querySelector('.row-pct');
+    const barEl = row.querySelector('.bar > i');
+    const foot = row.querySelector('.foot');
+    const pctText = `${pct}% ${unit}`;
+    const barWidth = `${pct}%`;
     const reset = side.reset || '';
-    row.querySelector('.foot').textContent = screen === 'codex'
-      ? `重置时间：${reset}`
+    const footText = screen === 'codex'
+      ? `\u91cd\u7f6e\u65f6\u95f4\uff1a${reset}`
       : `RESETS ${reset.toUpperCase()}`;
+    if (pctEl.textContent !== pctText) pctEl.textContent = pctText;
+    if (barEl.style.width !== barWidth) barEl.style.width = barWidth;
+    if (foot.textContent !== footText) foot.textContent = footText;
   }
 
-  async function refresh() {
+  async function refresh(manual = false) {
     const url = ($url.value || '').trim().replace(/\/+$/, '');
     const sec = $sec.value || '';
     if (!url) { $status.textContent = 'no relay url'; return; }
     localStorage.setItem(LS_URL, url);
     localStorage.setItem(LS_SEC, sec);
-    $status.textContent = 'loading…';
+    if (manual || !$status.textContent) $status.textContent = 'loading...';
     try {
       const r = await fetch(url + '/usage', {
         headers: sec ? { 'x-device-secret': sec } : {},
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
+      const nextPayload = JSON.stringify(data);
+      if (nextPayload === lastPayload && !manual) return;
+      lastPayload = nextPayload;
       for (const screen of ['claude', 'codex']) {
         const blk = data[screen];
         if (!blk) continue;
@@ -317,9 +336,9 @@
     }
   }
 
-  document.getElementById('reloadBtn').addEventListener('click', refresh);
+  document.getElementById('reloadBtn').addEventListener('click', () => refresh(true));
   refresh();
-  setInterval(refresh, 30_000);
+  setInterval(refresh, POLL_INTERVAL_MS);
 </script>
 </body>
 </html>
