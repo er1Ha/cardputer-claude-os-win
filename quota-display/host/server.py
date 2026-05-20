@@ -182,6 +182,98 @@ def scan_logs(root: Path) -> list[tuple[float, int]]:
     return samples
 
 
+# ---- Codex official rate_limits --------------------------------------
+#
+# Codex CLI writes the server-reported subscription rate limits straight
+# into each rollout file as `event_msg` events with payload.type =
+# "token_count". The shape is:
+#
+#     {"payload": {"info": {"rate_limits": {
+#         "primary":   {"used_percent": 1.0,  "window_minutes": 300,
+#                       "resets_at": <epoch_seconds>},
+#         "secondary": {"used_percent": 38.0, "window_minutes": 10080,
+#                       "resets_at": <epoch_seconds>},
+#         "plan_type": "plus", ...
+#     }}}}
+#
+# This is the authoritative source — no need to sum tokens or guess a
+# cap. We scan the most recent rollout files newest-first and take the
+# freshest rate_limits block we find.
+
+
+def _scan_file_for_rate_limits(path: Path) -> tuple[dict | None, float | None]:
+    """Return the last rate_limits block in `path` plus its event timestamp.
+
+    Reads the file once into memory and walks lines in reverse so we
+    can stop at the first match — rollout files are append-only and
+    the most recent turn is at the end.
+    """
+    try:
+        with path.open("rb") as f:
+            data = f.read()
+    except OSError:
+        return None, None
+    for raw in reversed(data.splitlines()):
+        if b"token_count" not in raw or b"rate_limits" not in raw:
+            continue
+        try:
+            ev = json.loads(raw)
+        except ValueError:
+            continue
+        payload = ev.get("payload") or {}
+        if payload.get("type") != "token_count":
+            continue
+        info = payload.get("info") or {}
+        rl = info.get("rate_limits")
+        if isinstance(rl, dict):
+            return rl, _parse_iso(ev.get("timestamp", ""))
+    return None, None
+
+
+def find_codex_rate_limits(root: Path) -> dict | None:
+    """Newest rate_limits snapshot across the last few rollout files.
+
+    Caps the scan at 5 files so a long session history doesn't slow
+    down each refresh tick; the rate_limits block we want will always
+    be in a very recent file (it's emitted on every Codex turn).
+    """
+    if not root.exists():
+        return None
+    files = sorted(root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    best: dict | None = None
+    best_ts: float = -1.0
+    for path in files[:5]:
+        rl, ts = _scan_file_for_rate_limits(path)
+        if rl is None:
+            continue
+        score = ts if ts is not None else path.stat().st_mtime
+        if score > best_ts:
+            best_ts = score
+            best = rl
+    return best
+
+
+def _codex_window(window: dict | None, now: float) -> dict:
+    """Convert one Codex rate_limits sub-block into the snapshot shape.
+
+    If the reported reset moment has already passed, the window has
+    rolled over since the snapshot was written — assume 0% used until
+    a fresher snapshot lands.
+    """
+    if not isinstance(window, dict):
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "missing"}
+    used = window.get("used_percent")
+    pct = int(used) if isinstance(used, (int, float)) else 0
+    pct = max(0, min(100, pct))
+    resets_at = window.get("resets_at")
+    if isinstance(resets_at, (int, float)) and resets_at < now:
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "rolled_over"}
+    reset_s = 0
+    if isinstance(resets_at, (int, float)):
+        reset_s = max(0, int(resets_at - now))
+    return {"tokens": pct, "cap": 100, "pct": pct, "reset_s": reset_s, "source": "rate_limits"}
+
+
 # ---- rollups ---------------------------------------------------------
 
 
@@ -222,20 +314,44 @@ def _window(samples, window_s, cap, now):
 
 def build_snapshot(cfg: dict) -> dict:
     now = time.time()
+    codex_root = Path(cfg["codex_log_dir"])
     with _CACHE_LOCK:
         claude_samples = scan_logs(Path(cfg["claude_log_dir"]))
-        codex_samples = scan_logs(Path(cfg["codex_log_dir"]))
+
+    # Codex CLI writes the server-reported subscription rate limits
+    # straight into rollout files, so we just lift them out. Fall back
+    # to local token summing only if no rate_limits block is found —
+    # that path is mostly a no-op since rollout events don't carry
+    # per-turn token totals in a shape we can sum reliably.
+    codex_rl = find_codex_rate_limits(codex_root)
+    if codex_rl is not None:
+        codex_view = {
+            "5h": _codex_window(codex_rl.get("primary"), now),
+            "7d": _codex_window(codex_rl.get("secondary"), now),
+            "plan": codex_rl.get("plan_type") or "",
+        }
+    else:
+        with _CACHE_LOCK:
+            codex_samples = scan_logs(codex_root)
+        codex_view = {
+            "5h": _window(codex_samples, _FIVE_HOURS_S, cfg["codex_5h_cap"], now),
+            "7d": _window(codex_samples, _SEVEN_DAYS_S, cfg["codex_7d_cap"], now),
+            "plan": "",
+        }
+        codex_view["5h"]["source"] = "estimated"
+        codex_view["7d"]["source"] = "estimated"
+
+    claude_view = {
+        "5h": _window(claude_samples, _FIVE_HOURS_S, cfg["claude_5h_cap"], now),
+        "7d": _window(claude_samples, _SEVEN_DAYS_S, cfg["claude_7d_cap"], now),
+    }
+    claude_view["5h"]["source"] = "estimated"
+    claude_view["7d"]["source"] = "estimated"
 
     return {
         "generated_at": int(now),
-        "claude": {
-            "5h": _window(claude_samples, _FIVE_HOURS_S, cfg["claude_5h_cap"], now),
-            "7d": _window(claude_samples, _SEVEN_DAYS_S, cfg["claude_7d_cap"], now),
-        },
-        "codex": {
-            "5h": _window(codex_samples, _FIVE_HOURS_S, cfg["codex_5h_cap"], now),
-            "7d": _window(codex_samples, _SEVEN_DAYS_S, cfg["codex_7d_cap"], now),
-        },
+        "claude": claude_view,
+        "codex": codex_view,
     }
 
 
@@ -330,7 +446,7 @@ _DASHBOARD_HTML = """<!doctype html>
   </div><span class=pct id=c7p></span></div>
 </div>
 <div class=card>
-  <div class=card-title>CODEX</div>
+  <div class=card-title>CODEX<span class=codex-plan></span></div>
   <div class=row><span class=label>5H</span><div style="flex:1">
     <div class=bar><div class="fill codex" id=x5></div></div>
     <div class=reset id=x5r></div>
@@ -347,6 +463,12 @@ function fmt(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
   return h ? `${h}h ${m}m` : `${m}m`;
 }
+function describe(w) {
+  const reset = "resets in " + fmt(w.reset_s);
+  if (w.source === "rate_limits") return "official · " + reset;
+  if (w.source === "rolled_over") return "window rolled over · " + reset;
+  return `${w.tokens.toLocaleString()} / ${w.cap.toLocaleString()} tok · ` + reset;
+}
 async function tick() {
   try {
     const r = await fetch("/api/quota");
@@ -357,9 +479,10 @@ async function tick() {
     for (const [id, w] of map) {
       document.getElementById(id).style.width = w.pct + "%";
       document.getElementById(id + "p").textContent = w.pct + "%";
-      document.getElementById(id + "r").textContent =
-        `${w.tokens.toLocaleString()} / ${w.cap.toLocaleString()} tok · resets in ${fmt(w.reset_s)}`;
+      document.getElementById(id + "r").textContent = describe(w);
     }
+    const plan = j.codex.plan ? ` (${j.codex.plan})` : "";
+    document.querySelector(".codex-plan").textContent = plan;
     document.getElementById("ts").textContent =
       "updated " + new Date(j.generated_at * 1000).toLocaleTimeString();
   } catch (e) {
