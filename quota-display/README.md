@@ -52,6 +52,19 @@ Server listens on `0.0.0.0:8765` by default. Browser to
 Give the computer a static DHCP reservation on your router so its IP
 doesn't drift.
 
+On Windows, install the server as a hidden logon task and open the
+firewall for the Cardputer:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\install_quota_service.ps1
+```
+
+Remove it later with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\install_quota_service.ps1 -Uninstall
+```
+
 ### 2. M5 Cardputer
 
 Copy `device/` to the device flash (use `buddy/scripts/push.py` from
@@ -66,6 +79,12 @@ mpremote reset
 
 The device reboots into `quota_app.py`, connects to Wi-Fi, and starts
 polling the host server every 30 s.
+
+Keys on the Cardputer:
+
+- `Tab` or `Space` toggles Claude/Codex.
+- `,`, `A`, or `C` selects Claude.
+- `/`, `D`, or `X` selects Codex.
 
 ## Sanity-check the parser
 

@@ -136,7 +136,9 @@ def main() -> int:
         # the test to actually hit api.anthropic.com).
         server._FILE_CACHE.clear()
         server._OAUTH_USAGE_CACHE.update({"ts": 0.0, "data": None})
+        server._APP_SERVER_CACHE.update({"ts": 0.0, "data": None})
         server.fetch_claude_oauth_usage = lambda _home: None
+        server.fetch_codex_app_server_rate_limits = lambda: None
 
         snap = server.build_snapshot(cfg)
         hb = server.heartbeat_payload(snap)
@@ -145,6 +147,7 @@ def main() -> int:
         # is still alive (so find_claude_hud_usage can still read the
         # cache file for plan name).
         server._OAUTH_USAGE_CACHE.update({"ts": 0.0, "data": None})
+        server._APP_SERVER_CACHE.update({"ts": 0.0, "data": None})
         server.fetch_claude_oauth_usage = lambda _home: {
             "five_hour":  {"utilization": 78, "resets_at": iso(now + 2 * 3600)},
             "seven_day":  {"utilization": 55, "resets_at": iso(now + 6 * 86400)},
