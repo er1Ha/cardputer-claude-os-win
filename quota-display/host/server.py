@@ -186,6 +186,151 @@ def scan_logs(root: Path) -> list[tuple[float, int]]:
     return samples
 
 
+# ---- Codex live rate limits via `codex app-server` -------------------
+#
+# `codex app-server` is the local JSON-RPC server Codex Desktop talks
+# to. Sending `account/rateLimits/read` returns the same numbers
+# /status renders — sourced directly from the OpenAI service, not from
+# whatever the latest rollout file happens to hold. Rollout files only
+# update after a turn completes, so during an active session they lag
+# the real percentage by a measurable amount.
+#
+# Spawning `codex.exe` costs ~1s, so cache for 30s. Falls through to
+# the rollout scanner if codex isn't on PATH or the subprocess hangs.
+
+
+def _codex_executable() -> str | None:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        desktop_exe = Path(local_app_data) / "OpenAI" / "Codex" / "bin" / "codex.exe"
+        if desktop_exe.exists():
+            return str(desktop_exe)
+    import shutil
+    for name in ("codex.cmd", "codex.exe", "codex"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+_APP_SERVER_CACHE: dict = {"ts": 0.0, "data": None}
+_APP_SERVER_TTL_S = 30.0
+
+
+def _normalize_app_server_snapshot(snapshot: dict) -> dict:
+    """Convert the camelCase JSON-RPC shape to the snake_case shape the
+    rest of the server uses for Codex windows."""
+    out: dict = {}
+    for src_key in ("primary", "secondary"):
+        side = snapshot.get(src_key)
+        if not isinstance(side, dict):
+            continue
+        used = side.get("usedPercent", 0) or 0
+        out[src_key] = {
+            "used_percent": float(used),
+            "window_minutes": side.get("windowDurationMins"),
+            "resets_at": side.get("resetsAt"),
+        }
+    plan = snapshot.get("planType")
+    if isinstance(plan, str):
+        out["plan_type"] = plan
+    return out
+
+
+def fetch_codex_app_server_rate_limits() -> dict | None:
+    """Drive `codex app-server` via stdin JSON-RPC. Cached for 30s.
+
+    Returns the same `{primary, secondary, plan_type}` shape the
+    rollout-file scanner returns, so callers downstream are agnostic
+    about which path we used.
+    """
+    now = time.time()
+    if (
+        _APP_SERVER_CACHE["data"] is not None
+        and now - _APP_SERVER_CACHE["ts"] < _APP_SERVER_TTL_S
+    ):
+        return _APP_SERVER_CACHE["data"]
+
+    exe = _codex_executable()
+    if not exe:
+        return None
+
+    # CREATE_NO_WINDOW keeps codex.exe from flashing a console on
+    # Windows; on POSIX the flag is 0.
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        proc = subprocess.Popen(
+            [exe, "app-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creationflags,
+        )
+    except OSError as exc:
+        sys.stderr.write("codex app-server spawn failed: {}\n".format(exc))
+        return None
+
+    try:
+        requests = [
+            {
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {"name": "cardputer-quota", "version": "0.1.0"},
+                    "capabilities": {"experimentalApi": True},
+                },
+            },
+            {"id": 2, "method": "account/rateLimits/read", "params": None},
+        ]
+        assert proc.stdin is not None and proc.stdout is not None
+        for r in requests:
+            proc.stdin.write(json.dumps(r) + "\n")
+        proc.stdin.flush()
+
+        deadline = time.monotonic() + 12.0
+        snapshot = None
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("id") == 2 and isinstance(msg.get("result"), dict):
+                snapshot = msg["result"]
+                break
+    finally:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    if not isinstance(snapshot, dict):
+        return None
+
+    by_limit = snapshot.get("rateLimitsByLimitId")
+    inner = None
+    if isinstance(by_limit, dict):
+        inner = by_limit.get("codex")
+    if not isinstance(inner, dict):
+        inner = snapshot.get("rateLimits")
+    if not isinstance(inner, dict):
+        return None
+
+    normalized = _normalize_app_server_snapshot(inner)
+    if not normalized:
+        return None
+    _APP_SERVER_CACHE["ts"] = now
+    _APP_SERVER_CACHE["data"] = normalized
+    return normalized
+
+
 # ---- Codex official rate_limits --------------------------------------
 #
 # Codex CLI writes the server-reported subscription rate limits straight
@@ -555,16 +700,27 @@ def build_snapshot(cfg: dict) -> dict:
     # ~/.claude/projects/... → ~/.claude (where claude-hud caches usage).
     claude_home = claude_log_root.parent
 
-    # Codex CLI writes the server-reported subscription rate limits
-    # straight into rollout files, so we just lift them out. Fall back
-    # to local token summing only if no rate_limits block is found.
-    codex_rl = find_codex_rate_limits(codex_root)
+    # Codex preference order:
+    #   1. `codex app-server` JSON-RPC — live OpenAI numbers, same as
+    #      /status. Costs a subprocess spawn (~1s), so cached for 30s.
+    #   2. Latest rate_limits block from rollout files — accurate at
+    #      the moment of the last completed turn, but lags during an
+    #      active session.
+    #   3. Token-sum estimate.
+    codex_rl = fetch_codex_app_server_rate_limits()
+    codex_source_tag = "codex_app_server"
+    if codex_rl is None:
+        codex_rl = find_codex_rate_limits(codex_root)
+        codex_source_tag = "rate_limits"
     if codex_rl is not None:
         codex_view = {
             "5h": _codex_window(codex_rl.get("primary"), now),
             "7d": _codex_window(codex_rl.get("secondary"), now),
             "plan": codex_rl.get("plan_type") or "",
         }
+        for win in ("5h", "7d"):
+            if codex_view[win].get("source") == "rate_limits":
+                codex_view[win]["source"] = codex_source_tag
     else:
         with _CACHE_LOCK:
             codex_samples = scan_logs(codex_root)
