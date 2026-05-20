@@ -25,9 +25,28 @@ from typing import Iterator
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
 EXAMPLE_PATH = Path(__file__).parent / "config.example.json"
+LOG_PATH = Path(__file__).parent / "quota-server.log"
 
 _FIVE_HOURS_S = 5 * 3600
 _SEVEN_DAYS_S = 7 * 86400
+
+
+def _log(msg: str) -> None:
+    if not msg.endswith("\n"):
+        msg += "\n"
+    stream = getattr(sys, "stderr", None)
+    if stream is not None:
+        try:
+            stream.write(msg)
+            stream.flush()
+            return
+        except Exception:
+            pass
+    try:
+        with LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(msg)
+    except Exception:
+        pass
 
 
 def load_config() -> dict:
@@ -237,6 +256,22 @@ def _normalize_app_server_snapshot(snapshot: dict) -> dict:
     return out
 
 
+def _normalize_app_server_account(snapshot: dict) -> dict:
+    account = snapshot.get("account")
+    if not isinstance(account, dict):
+        return {}
+    out: dict = {}
+    for src, dst in (
+        ("type", "type"),
+        ("email", "email"),
+        ("planType", "plan_type"),
+    ):
+        value = account.get(src)
+        if isinstance(value, str) and value:
+            out[dst] = value
+    return out
+
+
 def fetch_codex_app_server_rate_limits() -> dict | None:
     """Drive `codex app-server` via stdin JSON-RPC. Cached for 30s.
 
@@ -270,7 +305,7 @@ def fetch_codex_app_server_rate_limits() -> dict | None:
             creationflags=creationflags,
         )
     except OSError as exc:
-        sys.stderr.write("codex app-server spawn failed: {}\n".format(exc))
+        _log("codex app-server spawn failed: {}".format(exc))
         return None
 
     try:
@@ -283,7 +318,8 @@ def fetch_codex_app_server_rate_limits() -> dict | None:
                     "capabilities": {"experimentalApi": True},
                 },
             },
-            {"id": 2, "method": "account/rateLimits/read", "params": None},
+            {"id": 2, "method": "account/read", "params": {}},
+            {"id": 3, "method": "account/rateLimits/read", "params": None},
         ]
         assert proc.stdin is not None and proc.stdout is not None
         for r in requests:
@@ -291,6 +327,8 @@ def fetch_codex_app_server_rate_limits() -> dict | None:
         proc.stdin.flush()
 
         deadline = time.monotonic() + 12.0
+        account_snapshot = None
+        account_done = False
         snapshot = None
         while time.monotonic() < deadline:
             line = proc.stdout.readline()
@@ -303,7 +341,18 @@ def fetch_codex_app_server_rate_limits() -> dict | None:
             except ValueError:
                 continue
             if msg.get("id") == 2 and isinstance(msg.get("result"), dict):
+                account_snapshot = msg["result"]
+                account_done = True
+                continue
+            if msg.get("id") == 2 and msg.get("error"):
+                account_done = True
+                continue
+            if msg.get("id") == 3 and isinstance(msg.get("result"), dict):
                 snapshot = msg["result"]
+                if account_done:
+                    break
+                continue
+            if msg.get("id") == 3 and msg.get("error"):
                 break
     finally:
         try:
@@ -326,6 +375,11 @@ def fetch_codex_app_server_rate_limits() -> dict | None:
     normalized = _normalize_app_server_snapshot(inner)
     if not normalized:
         return None
+    if isinstance(account_snapshot, dict):
+        account = _normalize_app_server_account(account_snapshot)
+        if account:
+            normalized["account"] = account
+            normalized["plan_type"] = normalized.get("plan_type") or account.get("plan_type", "")
     _APP_SERVER_CACHE["ts"] = now
     _APP_SERVER_CACHE["data"] = normalized
     return normalized
@@ -556,8 +610,8 @@ def fetch_claude_oauth_usage(claude_home: Path) -> dict | None:
             body = exc.read()
         except Exception:
             pass
-        sys.stderr.write(
-            "claude oauth usage fetch failed: HTTP {}: {}\n".format(
+        _log(
+            "claude oauth usage fetch failed: HTTP {}: {}".format(
                 exc.code, body[:200].decode("utf-8", errors="replace")
             )
         )
@@ -567,7 +621,7 @@ def fetch_claude_oauth_usage(claude_home: Path) -> dict | None:
             return _OAUTH_USAGE_CACHE["data"]
         return None
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        sys.stderr.write("claude oauth usage fetch failed: {}\n".format(exc))
+        _log("claude oauth usage fetch failed: {}".format(exc))
         return None
     _OAUTH_USAGE_CACHE["ts"] = now
     _OAUTH_USAGE_CACHE["data"] = data
@@ -717,6 +771,7 @@ def build_snapshot(cfg: dict) -> dict:
             "5h": _codex_window(codex_rl.get("primary"), now),
             "7d": _codex_window(codex_rl.get("secondary"), now),
             "plan": codex_rl.get("plan_type") or "",
+            "account": codex_rl.get("account") or {},
         }
         for win in ("5h", "7d"):
             if codex_view[win].get("source") == "rate_limits":
@@ -728,6 +783,7 @@ def build_snapshot(cfg: dict) -> dict:
             "5h": _window(codex_samples, _FIVE_HOURS_S, cfg["codex_5h_cap"], now),
             "7d": _window(codex_samples, _SEVEN_DAYS_S, cfg["codex_7d_cap"], now),
             "plan": "",
+            "account": {},
         }
         codex_view["5h"]["source"] = "estimated"
         codex_view["7d"]["source"] = "estimated"
@@ -818,9 +874,9 @@ def _log_summary(snap: dict) -> None:
     c7 = snap["claude"]["7d"]
     x5 = snap["codex"]["5h"]
     x7 = snap["codex"]["7d"]
-    sys.stderr.write(
+    _log(
         "refresh  claude 5h={:>3}% ({}/{:,})  7d={:>3}%   "
-        "codex 5h={:>3}% ({}/{:,})  7d={:>3}%\n".format(
+        "codex 5h={:>3}% ({}/{:,})  7d={:>3}%".format(
             c5["pct"], c5["tokens"], c5["cap"], c7["pct"],
             x5["pct"], x5["tokens"], x5["cap"], x7["pct"],
         )
@@ -838,7 +894,7 @@ def refresher(cfg: dict, stop: threading.Event):
                 _LIVE["ts"] = time.time()
             _log_summary(snap)
         except Exception as exc:
-            print("refresh error:", exc, file=sys.stderr)
+            _log("refresh error: {}".format(exc))
         stop.wait(cfg.get("refresh_seconds", 10))
 
 
@@ -921,14 +977,14 @@ def cmd_serve(cfg: dict) -> None:
     t.start()
 
     addr = (cfg["host"], int(cfg["port"]))
-    sys.stderr.write("quota-display listening on http://{}:{}/\n".format(*addr))
-    sys.stderr.write("  dashboard:  http://{}:{}/\n".format(*addr))
-    sys.stderr.write("  M5 polls:   http://{}:{}/api/heartbeat\n".format(*addr))
+    _log("quota-display listening on http://{}:{}/".format(*addr))
+    _log("  dashboard:  http://{}:{}/".format(*addr))
+    _log("  M5 polls:   http://{}:{}/api/heartbeat".format(*addr))
     with ReusableTCPServer(addr, Handler) as srv:
         try:
             srv.serve_forever()
         except KeyboardInterrupt:
-            sys.stderr.write("\nshutting down\n")
+            _log("shutting down")
         finally:
             stop.set()
 

@@ -327,6 +327,11 @@
     state.textContent = label || (on ? "已连接" : "断开");
   }
 
+  function accountLabel(account) {
+    if (!account) return "";
+    return account.email || account.type || "";
+  }
+
   async function tick() {
     try {
       const r = await fetch("/api/quota", { cache: "no-store" });
@@ -364,6 +369,13 @@
         }
         setFoot(screen, foot, !primary.reset_s);
       }
+      // Surface the active Codex account (from app-server's account/read)
+      // in the connect chip when available.
+      const codexAccount = accountLabel((data.codex || {}).account);
+      const nameEl = document.getElementById("status-name");
+      nameEl.textContent = codexAccount
+        ? `Cardputer-Quota · ${codexAccount}`
+        : "Cardputer-Quota";
       setOnline(true);
     } catch (e) {
       setOnline(false, "未连接");
