@@ -14,6 +14,7 @@ A standalone LAN-only quota dashboard for Claude Code and Codex CLI.
 [M5 Cardputer]
    └─ device/quota_app.py polls every 30s
         renders 5H + 7D progress bars
+        Y opens an optional text chat page
 ```
 
 Internet not required. No Cloudflare, no Anthropic API key on the M5.
@@ -29,8 +30,9 @@ quota-display/
 ├── device/
 │   ├── main.py             MicroPython boot
 │   ├── quota_app.py        Wi-Fi poll + screen render
+│   ├── quota_chat.py       optional Y-key AI text chat
 │   ├── buddy_ui_cp.py      vendored UI (240x135 Cardputer panel)
-│   ├── config.example.py   Wi-Fi creds + server URL
+│   ├── config.example.py   Wi-Fi creds + server URL + chat config
 │   └── config.py           your local copy (gitignored)
 └── web/
     └── (dashboard HTML is embedded in server.py)
@@ -73,6 +75,7 @@ the parent repo, or `mpremote`):
 ```bash
 cp device/config.example.py device/config.py
 # edit WIFI_SSID, WIFI_PASS, SERVER_URL
+# optional: edit CHAT_WORKER_BASE and CHAT_DEVICE_SECRET for Y-key chat
 mpremote cp -r device/ :/
 mpremote reset
 ```
@@ -85,6 +88,13 @@ Keys on the Cardputer:
 - `Tab` or `Space` toggles Claude/Codex.
 - `,`, `A`, or `C` selects Claude.
 - `/`, `D`, or `X` selects Codex.
+- `Y` opens AI text chat from either quota screen.
+- In chat: type a prompt, `Enter` sends, `Y` starts another prompt,
+  `Q` or `Esc` returns to the quota screen.
+
+The Y-key chat uses the existing Push-to-Claude Worker `/ask-text`
+endpoint. Set `CHAT_WORKER_BASE` and `CHAT_DEVICE_SECRET` in
+`device/config.py`; leave them blank if you only want the quota screens.
 
 ## Sanity-check the parser
 

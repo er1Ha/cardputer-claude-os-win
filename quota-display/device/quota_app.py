@@ -15,6 +15,11 @@ from hardware import MatrixKeyboard
 import config
 from buddy_ui_cp import BuddyUI
 
+try:
+    import quota_chat
+except Exception:
+    quota_chat = None
+
 
 def _connect_wifi(ssid: str, password: str, timeout_s: int = 20) -> bool:
     sta = network.WLAN(network.STA_IF)
@@ -80,6 +85,11 @@ def _view_for_key(k, current: str):
     return None
 
 
+def _is_chat_key(k) -> bool:
+    ch = _key_text(k)
+    return ch == "y"
+
+
 def main():
     M5.begin()
     ui = BuddyUI()
@@ -110,6 +120,27 @@ def main():
         k = kb.get_key()
         next_view = _view_for_key(k, view)
         now = time.ticks_ms()
+        if _is_chat_key(k) and time.ticks_diff(now, last_toggle) > 250:
+            last_toggle = now
+            if quota_chat is None:
+                ui.flash_toast("Chat missing", 0xFF0000)
+            else:
+                try:
+                    quota_chat.run(view)
+                except Exception as e:
+                    print("chat error:", e)
+                    ui.flash_toast("Chat error", 0xFF0000)
+                    time.sleep_ms(900)
+            if last_hb is not None:
+                hb = dict(last_hb)
+                hb["usage_view"] = view
+                ui.update_heartbeat(hb)
+            else:
+                ui.set_connection("connected")
+            next_poll = 0
+            time.sleep_ms(250)
+            continue
+
         if next_view is not None and next_view != view and time.ticks_diff(now, last_toggle) > 250:
             view = next_view
             last_toggle = now

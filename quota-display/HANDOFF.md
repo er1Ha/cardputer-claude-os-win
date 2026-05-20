@@ -65,7 +65,7 @@ Write `quota-display/windows/install_quota_service.ps1` modeled on
 
 ### 3. M5 device side (priority: high)
 Existing scaffolding at `quota-display/device/`:
-- `main.py`, `quota_app.py`, `buddy_ui_cp.py` (vendored), `config.example.py`.
+- `main.py`, `quota_app.py`, `quota_chat.py`, `buddy_ui_cp.py` (vendored), `config.example.py`.
 - `quota_app.py` already connects to Wi-Fi and polls
   `SERVER_URL` (default `http://192.168.1.50:8765/api/heartbeat`) every
   30s, feeding the response into `BuddyUI.update_heartbeat()`.
@@ -73,13 +73,10 @@ Existing scaffolding at `quota-display/device/`:
 Remaining tasks:
 - Push the files to a Cardputer-Adv (use `buddy/scripts/push.py` in
   the parent repo).
-- Add a keypress handler to switch panels (Claude/Codex) on the device
-  too — the `BuddyUI.update_heartbeat()` reads `usage_view` from the
-  heartbeat dict, but the device currently has no input loop. Cheapest
-  approach: read M5.Keyboard in `quota_app.main()` loop, toggle a
-  local `view` variable on Tab/Arrow press, set
-  `hb["usage_view"] = "claude" | "codex"` before calling
-  `update_heartbeat`.
+- Device key handling is implemented: Tab/Space toggles panels, comma/A/C
+  selects Claude, slash/D/X selects Codex, and Y opens optional AI text chat.
+- If Y-key chat is needed on hardware, fill `CHAT_WORKER_BASE` and
+  `CHAT_DEVICE_SECRET` in the gitignored device `config.py` first.
 - Verify the device LCD rendering matches the browser preview at the
   pixel level. They share `buddy_ui_cp.py` so they should, but
   M5.Lcd's text metrics on DejaVu9 differ slightly from CSS text;
@@ -122,8 +119,9 @@ quota-display/
 ├── device/
 │   ├── main.py                 MicroPython boot
 │   ├── quota_app.py            Wi-Fi + poll loop
+│   ├── quota_chat.py           optional Y-key AI text chat
 │   ├── buddy_ui_cp.py          vendored 240x135 renderer
-│   └── config.example.py       Wi-Fi creds + server URL
+│   └── config.example.py       Wi-Fi creds + server URL + chat config
 └── web/
     └── index.html              dashboard served at GET /
 ```
