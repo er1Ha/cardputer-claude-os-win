@@ -328,6 +328,7 @@ def fetch_codex_app_server_rate_limits() -> dict | None:
 
         deadline = time.monotonic() + 12.0
         account_snapshot = None
+        account_done = False
         snapshot = None
         while time.monotonic() < deadline:
             line = proc.stdout.readline()
@@ -341,9 +342,17 @@ def fetch_codex_app_server_rate_limits() -> dict | None:
                 continue
             if msg.get("id") == 2 and isinstance(msg.get("result"), dict):
                 account_snapshot = msg["result"]
+                account_done = True
+                continue
+            if msg.get("id") == 2 and msg.get("error"):
+                account_done = True
                 continue
             if msg.get("id") == 3 and isinstance(msg.get("result"), dict):
                 snapshot = msg["result"]
+                if account_done:
+                    break
+                continue
+            if msg.get("id") == 3 and msg.get("error"):
                 break
     finally:
         try:

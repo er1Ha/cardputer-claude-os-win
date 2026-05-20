@@ -154,6 +154,26 @@ def main() -> int:
         }
         snap2 = server.build_snapshot(cfg)
 
+        server.fetch_codex_app_server_rate_limits = lambda: {
+            "primary": {
+                "used_percent": 9,
+                "window_minutes": 300,
+                "resets_at": now + 4 * 3600,
+            },
+            "secondary": {
+                "used_percent": 31,
+                "window_minutes": 10080,
+                "resets_at": now + 6 * 86400,
+            },
+            "plan_type": "team",
+            "account": {
+                "type": "chatgpt",
+                "email": "codex@example.com",
+                "plan_type": "team",
+            },
+        }
+        snap3 = server.build_snapshot(cfg)
+
     failures = []
 
     def expect(label, got, want):
@@ -182,6 +202,11 @@ def main() -> int:
     expect("oauth source",             snap2["claude"]["5h"]["source"], "claude_oauth")
     # Plan still comes from hud since OAuth response doesn't carry it.
     expect("oauth + hud plan",         snap2["claude"]["plan"], "Pro")
+
+    # Live Codex app-server carries account metadata through to the UI JSON.
+    expect("codex app-server source",  snap3["codex"]["5h"]["source"], "codex_app_server")
+    expect("codex account email",      snap3["codex"]["account"]["email"], "codex@example.com")
+    expect("codex account plan",       snap3["codex"]["account"]["plan_type"], "team")
 
     # Claude hud cache sets fiveHourResetAt = now + 3h, so the
     # snapshot's reset_s should land just under 3 * 3600.

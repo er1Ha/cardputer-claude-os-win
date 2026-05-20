@@ -1,7 +1,7 @@
 # Handoff — quota-display next steps
 
 PR: https://github.com/er1Ha/cardputer-claude-os-win/pull/1
-Branch: `claude/fix-quota-display-7xDQu`
+Branch: `claude/codex_Creditlimit`
 Latest commit at handoff: `e366358`
 
 The **host side is finished and verified live**. The browser dashboard
