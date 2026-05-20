@@ -10,7 +10,7 @@ compatibility_date = "2025-01-01"
 #   wrangler kv namespace create HISTORY
 [[kv_namespaces]]
 binding = "HISTORY"
-id = "REPLACE_WITH_YOUR_HISTORY_KV_ID"
+id = "56df9d1a9a2242b99f5c1b97f8ae1fc8"
 
 # ---- Pager + Console index --------------------------------------------
 # Per-device session list, agent/env IDs, and daily spawn counts. Small,
@@ -18,7 +18,7 @@ id = "REPLACE_WITH_YOUR_HISTORY_KV_ID"
 #   wrangler kv namespace create INDEX
 [[kv_namespaces]]
 binding = "INDEX"
-id = "REPLACE_WITH_YOUR_INDEX_KV_ID"
+id = "546951de97c84fdebeabc77b3e6702ad"
 
 # ---- SessionRouter Durable Object -------------------------------------
 # One DO per Anthropic session_id. Mirrors the event log, holds the
