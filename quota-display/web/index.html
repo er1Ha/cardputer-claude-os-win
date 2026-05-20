@@ -304,6 +304,11 @@
     titleEl.textContent = plan ? `${base} ${plan.toUpperCase()}` : base;
   }
 
+  function accountLabel(account) {
+    if (!account) return '';
+    return account.email || account.type || '';
+  }
+
   async function refresh() {
     try {
       const r = await fetch('/api/quota');
@@ -322,9 +327,11 @@
       const xs = data.codex || {};
       const csrc = [cs['5h']?.source, cs['7d']?.source].filter(Boolean).join('/') || 'unknown';
       const xsrc = [xs['5h']?.source, xs['7d']?.source].filter(Boolean).join('/') || 'unknown';
+      const codexAccount = accountLabel(xs.account);
       $status.textContent =
         `updated ${new Date((data.generated_at || Date.now()/1000) * 1000).toLocaleTimeString()}` +
-        ` | claude ${csrc} | codex ${xsrc}`;
+        ` | claude ${csrc} | codex ${xsrc}` +
+        (codexAccount ? ` | account ${codexAccount}` : '');
     } catch (e) {
       $status.textContent = 'error: ' + e.message;
     }
