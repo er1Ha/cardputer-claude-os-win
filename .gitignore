@@ -11,3 +11,5 @@ venv/
 buddy/device/apps/config.py
 worker/.dev.vars
 worker/.wrangler/
+quota-display/host/config.json
+quota-display/device/config.py

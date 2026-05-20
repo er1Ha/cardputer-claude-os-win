@@ -1,0 +1,14 @@
+{
+  "host": "0.0.0.0",
+  "port": 8765,
+
+  "claude_log_dir": "~/.claude/projects",
+  "codex_log_dir": "~/.codex/sessions",
+
+  "claude_5h_cap": 200000,
+  "claude_7d_cap": 1400000,
+  "codex_5h_cap": 50000,
+  "codex_7d_cap": 350000,
+
+  "refresh_seconds": 10
+}
