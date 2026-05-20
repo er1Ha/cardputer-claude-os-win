@@ -34,22 +34,18 @@ import {
 
 export { SessionRouter } from "./router.do.js";
 
-// ---- Push-to-Claude (existing) -------------------------------------
+// ---- Push-to-Claude / Mimo chat ------------------------------------
 
 const CHAT_SYSTEM_PROMPT =
-  "You are Claude responding on a 240x135 pixel handheld LCD. " +
+  "You are an AI assistant responding on a 240x135 pixel handheld LCD. " +
   "Reply in 1-3 short sentences. Plain ASCII when possible. " +
   "No markdown, no lists, no code fences. " +
   "Be direct; assume the user can't scroll. " +
   "You may receive a few prior turns of conversation history; " +
   "treat the latest user message as the current question.";
 
-const DEFAULT_CHAT_MODEL = "claude-3-5-haiku-20241022";
-const FALLBACK_CHAT_MODELS = [
-  "claude-haiku-4-5-20251001",
-  "claude-3-haiku-20240307",
-  "claude-3-5-sonnet-20241022",
-];
+const DEFAULT_CHAT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
+const DEFAULT_CHAT_MODEL = "mimo-v2.5-pro";
 const HISTORY_MAX_MESSAGES = 8;
 const HISTORY_TTL_SECONDS = 24 * 3600;
 
@@ -84,51 +80,46 @@ async function appendTurn(env, deviceSecret, userMsg, assistantMsg) {
   });
 }
 
-async function callHaiku(env, deviceSecret, userMessage) {
+async function callChat(env, deviceSecret, userMessage) {
   const history = await getHistory(env, deviceSecret);
-  const messages = [...history, { role: "user", content: userMessage }];
-  const preferred = env.CHAT_MODEL || DEFAULT_CHAT_MODEL;
-  const models = [preferred, ...FALLBACK_CHAT_MODELS].filter(
-    (model, index, all) => model && all.indexOf(model) === index,
-  );
-  const failures = [];
-
-  for (const model of models) {
-    const claudeResp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 250,
-        system: CHAT_SYSTEM_PROMPT,
-        messages,
-      }),
-    });
-
-    if (!claudeResp.ok) {
-      const detail = (await claudeResp.text()).slice(0, 300);
-      failures.push({ model, status: claudeResp.status, detail });
-      if (![403, 404].includes(claudeResp.status)) break;
-      continue;
-    }
-    const data = await claudeResp.json();
-    const text = (data.content?.[0]?.text || "").trim() || "(empty)";
-    await appendTurn(env, deviceSecret, userMessage, text);
-    return { ok: true, text, model };
+  const model = env.CHAT_MODEL || DEFAULT_CHAT_MODEL;
+  const baseUrl = (env.CHAT_BASE_URL || DEFAULT_CHAT_BASE_URL).replace(/\/+$/, "");
+  const apiKey = env.CHAT_API_KEY;
+  if (!apiKey) {
+    return { ok: false, status: 500, model, detail: "CHAT_API_KEY is not set" };
   }
 
-  const last = failures[failures.length - 1] || {};
-  return {
-    ok: false,
-    status: last.status || 502,
-    detail: last.detail || "no Anthropic response",
-    model: last.model || preferred,
-    attempts: failures,
-  };
+  const messages = [
+    { role: "system", content: CHAT_SYSTEM_PROMPT },
+    ...history,
+    { role: "user", content: userMessage },
+  ];
+  const chatResp = await fetch(baseUrl + "/chat/completions", {
+    method: "POST",
+    headers: {
+      "authorization": "Bearer " + apiKey,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      max_tokens: 250,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!chatResp.ok) {
+    const detail = (await chatResp.text()).slice(0, 500);
+    return { ok: false, status: chatResp.status, detail, model };
+  }
+  const data = await chatResp.json();
+  const text = (
+    data.choices?.[0]?.message?.content ||
+    data.choices?.[0]?.text ||
+    ""
+  ).trim() || "(empty)";
+  await appendTurn(env, deviceSecret, userMessage, text);
+  return { ok: true, text, model };
 }
 
 async function handleAsk(request, env) {
@@ -172,15 +163,14 @@ async function handleAsk(request, env) {
   }
 
   const deviceSecret = request.headers.get("x-device-secret");
-  const result = await callHaiku(env, deviceSecret, transcript);
+  const result = await callChat(env, deviceSecret, transcript);
   if (!result.ok) {
     return jsonResp(
       {
         transcript,
-        error: "claude failed",
+        error: "chat failed",
         status: result.status,
         model: result.model,
-        attempts: result.attempts,
         detail: result.detail,
       },
       502,
@@ -201,15 +191,14 @@ async function handleAskText(request, env) {
   if (!prompt) return jsonResp({ error: "empty prompt" }, 400);
 
   const deviceSecret = request.headers.get("x-device-secret");
-  const result = await callHaiku(env, deviceSecret, prompt);
+  const result = await callChat(env, deviceSecret, prompt);
   if (!result.ok) {
     return jsonResp(
       {
         transcript: prompt,
-        error: "claude failed",
+        error: "chat failed",
         status: result.status,
         model: result.model,
-        attempts: result.attempts,
         detail: result.detail,
       },
       502,
@@ -261,12 +250,15 @@ export default {
     const key = `${request.method} ${url.pathname}`;
 
     if (request.method === "GET" && url.pathname === "/") {
-      return new Response("push-to-claude relay ok\n", {
+      return new Response(
+        `push-to-claude relay ok\nchat=${env.CHAT_MODEL || DEFAULT_CHAT_MODEL}\n`,
+        {
         headers: { "content-type": "text/plain" },
-      });
+        },
+      );
     }
 
-    // Push-to-Claude (single-turn). Untouched.
+    // Push-to-Claude (single-turn).
     if (request.method === "POST" && url.pathname === "/ask")
       return handleAsk(request, env);
     if (request.method === "POST" && url.pathname === "/ask-text")
