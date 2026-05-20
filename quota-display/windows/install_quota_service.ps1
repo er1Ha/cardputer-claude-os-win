@@ -25,12 +25,29 @@ function Assert-Admin {
     }
 }
 
+function Stop-QuotaServerProcesses {
+    param(
+        [string]$ServerScript
+    )
+
+    $escapedScript = [regex]::Escape($ServerScript)
+    Get-CimInstance Win32_Process |
+        Where-Object {
+            ($_.Name -eq "python.exe" -or $_.Name -eq "pythonw.exe") -and
+            $_.CommandLine -match $escapedScript
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+}
+
 Assert-Admin
 
 $serverScript = Join-Path $RepoRoot "quota-display\host\server.py"
 $configPath = Join-Path $RepoRoot "quota-display\host\config.json"
 
 if ($Uninstall) {
+    Stop-QuotaServerProcesses -ServerScript $serverScript
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Remove-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
     Write-Host "Removed scheduled task '$TaskName' and firewall rule '$FirewallRuleName'."
@@ -54,6 +71,8 @@ $pythonCmd = Get-Command $Python -ErrorAction SilentlyContinue
 if (-not $pythonCmd) {
     throw "Could not find '$Python' on PATH. Pass -Python with the full pythonw.exe path."
 }
+
+Stop-QuotaServerProcesses -ServerScript $serverScript
 
 $argList = "`"$serverScript`""
 $action = New-ScheduledTaskAction -Execute $pythonCmd.Source -Argument $argList -WorkingDirectory $RepoRoot
