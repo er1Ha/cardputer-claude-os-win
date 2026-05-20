@@ -479,206 +479,20 @@ def refresher(cfg: dict, stop: threading.Event):
         stop.wait(cfg.get("refresh_seconds", 10))
 
 
-_DASHBOARD_HTML = """<!doctype html>
-<meta charset=utf-8>
-<title>Claude / Codex Quota</title>
-<style>
-  /* The screen mockup is 240x135 — same as the Cardputer LCD. Coords
-     in JS below match buddy_ui_cp.py exactly so this preview is a
-     faithful render of what the M5 will draw. */
-  :root { --scale: 3; }
-  html, body { background: #1f1f1f; color: #f0eee6;
-               font-family: ui-monospace, Menlo, monospace;
-               margin: 0; min-height: 100vh;
-               display: flex; flex-direction: column;
-               align-items: center; justify-content: center; gap: 16px; }
-  .screen-wrap { position: relative; }
-  .screen {
-    width: calc(240px * var(--scale));
-    height: calc(135px * var(--scale));
-    background: #f0eee6;
-    image-rendering: pixelated;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 0 0 4px #333, 0 0 0 8px #1f1f1f,
-                0 12px 32px rgba(0,0,0,0.6);
-    border-radius: 6px;
-  }
-  /* Inner uses absolute 240x135 coords and scales as a whole. */
-  .inner { position: absolute; left: 0; top: 0; width: 240px; height: 135px;
-           transform: scale(var(--scale)); transform-origin: top left;
-           color: #111; font-family: 'DejaVu Sans Mono', monospace; }
-  .header-title { position: absolute; top: 7px; width: 100%;
-                  text-align: center; font-size: 9px; font-weight: bold;
-                  letter-spacing: 0.05em; }
-  .row { position: absolute; left: 6px; right: 6px; }
-  .row .label { font-size: 14px; font-weight: bold; line-height: 14px; }
-  .row .pct { position: absolute; right: 0; top: 5px;
-              font-size: 9px; color: #111; }
-  .row .bar { position: absolute; left: 0; right: 0; top: 22px; height: 5px;
-              background: #d9d6cc; }
-  .row .fill { height: 100%; transition: width 0.4s ease; }
-  .row .reset { position: absolute; left: 0; top: 30px;
-                font-size: 9px; color: #777; white-space: nowrap; }
-  .icon { position: absolute; left: 6px; top: 3px; width: 17px; height: 17px; }
-  .pager { font-size: 11px; color: #777; }
-  .pager .key { color: #f0eee6; }
-  .stamp { font-size: 11px; color: #555; }
-  .err { color: #ff8866; }
-</style>
+_WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 
-<div class=screen-wrap>
-  <div class=screen>
-    <div class=inner>
-      <svg class=icon viewBox="0 0 17 17" id=icon></svg>
-      <div class=header-title id=title>—</div>
 
-      <div class=row style="top:34px">
-        <span class=label>5H</span>
-        <span class=pct id=p5>0%</span>
-        <div class=bar><div class=fill id=f5 style="background:#cc785c;width:0"></div></div>
-        <div class=reset id=r5>RESETS --</div>
-      </div>
+def _load_dashboard() -> bytes:
+    """Read the dashboard HTML fresh on each request so the UI can be
+    edited and reloaded without restarting the server."""
+    path = _WEB_ROOT / "index.html"
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        msg = "dashboard html missing at {}: {}".format(path, exc)
+        return msg.encode("utf-8")
 
-      <div class=row style="top:80px">
-        <span class=label>7D</span>
-        <span class=pct id=p7>0%</span>
-        <div class=bar><div class=fill id=f7 style="background:#cc785c;width:0"></div></div>
-        <div class=reset id=r7>RESETS --</div>
-      </div>
-    </div>
-  </div>
-</div>
 
-<div class=pager>
-  <span class=key>← →</span> / <span class=key>A D</span> / <span class=key>Tab</span> switch
-  &nbsp;·&nbsp; <span id=which>—</span>
-</div>
-<div class=stamp id=ts>warming up</div>
-
-<script>
-const CLAUDE_ICON = [
-  "00000110001000000",
-  "00000110011000000",
-  "000001110110111000",
-  "001110110110111000",
-  "00111111111111000",
-  "0001111111111000",
-  "00000111111111111",
-  "01111111111111111",
-  "0111111111111110",
-  "00000011111111111",
-  "0000111111111001",
-  "00011111111111",
-  "000101101101111",
-  "0000011011011",
-  "0000010011001",
-  "000000001",
-];
-const GPT_ICON = [
-  "00000011111000",
-  "00000111111111",
-  "000011001111111",
-  "0011110111000011",
-  "0111111100111001",
-  "0110111111101111",
-  "0110101111110111",
-  "01101111001111011",
-  "01101111001111011",
-  "00111011111101011",
-  "00111101111111011",
-  "00100111001111111",
-  "0011000011101111",
-  "00011111110011",
-  "0000111111111",
-  "000000011111",
-];
-function renderIcon(rows, color) {
-  let rects = "";
-  for (let y = 0; y < rows.length; y++) {
-    const r = rows[y];
-    for (let x = 0; x < r.length; x++) {
-      if (r[x] === "1") rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${color}"/>`;
-    }
-  }
-  return rects;
-}
-
-function fmtReset(sec) {
-  if (!sec) return "--";
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
-  if (h >= 24) {
-    const d = Math.floor(h / 24);
-    const rh = h % 24;
-    return `IN ${d}D ${rh}H`;
-  }
-  if (h) return `IN ${h} HR ${m} MIN`;
-  return `IN ${m} MIN`;
-}
-
-let viewIdx = 0;          // 0 = claude, 1 = codex
-let latest = null;
-const VIEWS = ["claude", "codex"];
-
-function paint() {
-  if (!latest) return;
-  const key = VIEWS[viewIdx];
-  const w5 = latest[key]["5h"], w7 = latest[key]["7d"];
-  const accent = key === "claude" ? "#cc785c" : "#111111";
-
-  const plan = latest[key].plan || "";
-  document.getElementById("title").textContent =
-    key.toUpperCase() + (plan ? " " + plan.toUpperCase() : "");
-
-  document.getElementById("icon").innerHTML =
-    renderIcon(key === "claude" ? CLAUDE_ICON : GPT_ICON, accent);
-
-  document.getElementById("p5").textContent = w5.pct + "% USED";
-  document.getElementById("p7").textContent = w7.pct + "% USED";
-
-  document.getElementById("f5").style.background = accent;
-  document.getElementById("f7").style.background = accent;
-  document.getElementById("f5").style.width = w5.pct + "%";
-  document.getElementById("f7").style.width = w7.pct + "%";
-
-  document.getElementById("r5").textContent = "RESETS " + fmtReset(w5.reset_s);
-  document.getElementById("r7").textContent = "RESETS " + fmtReset(w7.reset_s);
-
-  document.getElementById("which").textContent =
-    `viewing ${key} (${viewIdx + 1}/${VIEWS.length})`;
-}
-
-function switchView(delta) {
-  viewIdx = (viewIdx + delta + VIEWS.length) % VIEWS.length;
-  paint();
-}
-
-async function tick() {
-  try {
-    const r = await fetch("/api/quota");
-    if (!r.ok) throw new Error(r.status);
-    latest = await r.json();
-    paint();
-    document.getElementById("ts").textContent =
-      "updated " + new Date(latest.generated_at * 1000).toLocaleTimeString();
-  } catch (e) {
-    document.getElementById("ts").innerHTML =
-      "<span class=err>fetch error</span>";
-  }
-}
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "ArrowRight" || e.key === "Tab" || e.key === "d" || e.key === "D") {
-    e.preventDefault(); switchView(1);
-  } else if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
-    e.preventDefault(); switchView(-1);
-  }
-});
-document.querySelector(".screen").addEventListener("click", () => switchView(1));
-
-tick(); setInterval(tick, 5000);
-</script>
-"""
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -702,7 +516,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index", "/index.html"):
-            self._send(200, _DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, _load_dashboard(), "text/html; charset=utf-8")
             return
         if path == "/api/quota":
             with _LIVE_LOCK:
