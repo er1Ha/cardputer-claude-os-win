@@ -44,7 +44,12 @@ const CHAT_SYSTEM_PROMPT =
   "You may receive a few prior turns of conversation history; " +
   "treat the latest user message as the current question.";
 
-const CHAT_MODEL = "claude-haiku-4-5-20251001";
+const DEFAULT_CHAT_MODEL = "claude-3-5-haiku-20241022";
+const FALLBACK_CHAT_MODELS = [
+  "claude-haiku-4-5-20251001",
+  "claude-3-haiku-20240307",
+  "claude-3-5-sonnet-20241022",
+];
 const HISTORY_MAX_MESSAGES = 8;
 const HISTORY_TTL_SECONDS = 24 * 3600;
 
@@ -82,30 +87,48 @@ async function appendTurn(env, deviceSecret, userMsg, assistantMsg) {
 async function callHaiku(env, deviceSecret, userMessage) {
   const history = await getHistory(env, deviceSecret);
   const messages = [...history, { role: "user", content: userMessage }];
+  const preferred = env.CHAT_MODEL || DEFAULT_CHAT_MODEL;
+  const models = [preferred, ...FALLBACK_CHAT_MODELS].filter(
+    (model, index, all) => model && all.indexOf(model) === index,
+  );
+  const failures = [];
 
-  const claudeResp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: CHAT_MODEL,
-      max_tokens: 250,
-      system: CHAT_SYSTEM_PROMPT,
-      messages,
-    }),
-  });
+  for (const model of models) {
+    const claudeResp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 250,
+        system: CHAT_SYSTEM_PROMPT,
+        messages,
+      }),
+    });
 
-  if (!claudeResp.ok) {
-    const detail = (await claudeResp.text()).slice(0, 300);
-    return { ok: false, status: claudeResp.status, detail };
+    if (!claudeResp.ok) {
+      const detail = (await claudeResp.text()).slice(0, 300);
+      failures.push({ model, status: claudeResp.status, detail });
+      if (![403, 404].includes(claudeResp.status)) break;
+      continue;
+    }
+    const data = await claudeResp.json();
+    const text = (data.content?.[0]?.text || "").trim() || "(empty)";
+    await appendTurn(env, deviceSecret, userMessage, text);
+    return { ok: true, text, model };
   }
-  const data = await claudeResp.json();
-  const text = (data.content?.[0]?.text || "").trim() || "(empty)";
-  await appendTurn(env, deviceSecret, userMessage, text);
-  return { ok: true, text };
+
+  const last = failures[failures.length - 1] || {};
+  return {
+    ok: false,
+    status: last.status || 502,
+    detail: last.detail || "no Anthropic response",
+    model: last.model || preferred,
+    attempts: failures,
+  };
 }
 
 async function handleAsk(request, env) {
@@ -156,6 +179,8 @@ async function handleAsk(request, env) {
         transcript,
         error: "claude failed",
         status: result.status,
+        model: result.model,
+        attempts: result.attempts,
         detail: result.detail,
       },
       502,
@@ -183,6 +208,8 @@ async function handleAskText(request, env) {
         transcript: prompt,
         error: "claude failed",
         status: result.status,
+        model: result.model,
+        attempts: result.attempts,
         detail: result.detail,
       },
       502,

@@ -45,6 +45,7 @@ fallthrough = true
 # Per-device daily cap on new agent sessions, a cheap fork-bomb guard.
 [vars]
 PAGER_DAILY_SPAWN_CAP = "30"
+CHAT_MODEL = "claude-3-5-haiku-20241022"
 
 # ---- Secrets (set via `wrangler secret put`, not committed) -----------
 # DEVICE_SECRET        — auth for Pager + Console + Push-to-Claude
