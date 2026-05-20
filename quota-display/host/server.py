@@ -11,10 +11,14 @@ import argparse
 import http.server
 import json
 import os
+import re
 import socketserver
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -260,6 +264,114 @@ def find_codex_rate_limits(root: Path) -> dict | None:
     return best
 
 
+# ---- Claude OAuth official usage -------------------------------------
+#
+# api.anthropic.com/api/oauth/usage returns the same numbers the
+# official HUD plugins display — five_hour and seven_day blocks with
+# `utilization` (percent) and `resets_at` (ISO). This is the freshest
+# possible source because we ask Anthropic directly each refresh tick;
+# the claude-hud cache file only updates when Claude Code renders its
+# status line, so it can sit stale for days if you haven't launched
+# Claude Code recently.
+#
+# Auth: bearer token from ~/.claude/.credentials.json
+# (claudeAiOauth.accessToken), the same token Claude Code itself uses.
+# The User-Agent must look like `claude-code/<version>` — the endpoint
+# 429s other UAs.
+
+
+def _claude_oauth_token(claude_home: Path) -> str | None:
+    env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if env:
+        return env
+    path = claude_home / ".credentials.json"
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8-sig") as f:
+            creds = json.load(f)
+    except (OSError, ValueError):
+        return None
+    inner = creds.get("claudeAiOauth")
+    if isinstance(inner, dict):
+        tok = inner.get("accessToken")
+        if isinstance(tok, str) and tok:
+            return tok
+    return None
+
+
+def _claude_code_version() -> str:
+    """Probe `claude --version` so the User-Agent looks like a real CLI."""
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        out = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=3,
+            creationflags=creationflags,
+        ).stdout.strip()
+        match = re.match(r"^(\d+\.\d+\.\d+)", out)
+        if match:
+            return match.group(1)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "2.1.0"
+
+
+_OAUTH_USAGE_CACHE: dict = {"ts": 0.0, "data": None}
+_OAUTH_USAGE_TTL_S = 30.0
+
+
+def fetch_claude_oauth_usage(claude_home: Path) -> dict | None:
+    """GET api.anthropic.com/api/oauth/usage, cached for OAUTH_TTL seconds.
+
+    Returns the parsed JSON ({"five_hour": {...}, "seven_day": {...}, ...})
+    or None if there's no token, the request failed, or the body wasn't
+    JSON. Caller handles `None` by falling back to the claude-hud cache
+    or token-summing path.
+    """
+    now = time.time()
+    if (
+        _OAUTH_USAGE_CACHE["data"] is not None
+        and now - _OAUTH_USAGE_CACHE["ts"] < _OAUTH_USAGE_TTL_S
+    ):
+        return _OAUTH_USAGE_CACHE["data"]
+    token = _claude_oauth_token(claude_home)
+    if not token:
+        return None
+    req = urllib.request.Request(
+        "https://api.anthropic.com/api/oauth/usage",
+        headers={
+            "accept": "application/json",
+            "authorization": "Bearer " + token,
+            "anthropic-beta": "oauth-2025-04-20",
+            "user-agent": "claude-code/" + _claude_code_version(),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        sys.stderr.write("claude oauth usage fetch failed: {}\n".format(exc))
+        return None
+    _OAUTH_USAGE_CACHE["ts"] = now
+    _OAUTH_USAGE_CACHE["data"] = data
+    return data
+
+
+def _claude_oauth_window(side, now: float) -> dict:
+    if not isinstance(side, dict):
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "missing"}
+    util = side.get("utilization")
+    pct = int(round(util)) if isinstance(util, (int, float)) else 0
+    pct = max(0, min(100, pct))
+    resets_at_iso = side.get("resets_at")
+    resets_at = _parse_iso(resets_at_iso) if isinstance(resets_at_iso, str) else None
+    if resets_at is not None and resets_at < now:
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "rolled_over"}
+    reset_s = max(0, int(resets_at - now)) if resets_at is not None else 0
+    return {"tokens": pct, "cap": 100, "pct": pct, "reset_s": reset_s, "source": "claude_oauth"}
+
+
 # ---- Claude HUD official usage ---------------------------------------
 #
 # The community `claude-hud` plugin (jarrodwatts/claude-hud) caches the
@@ -393,12 +505,22 @@ def build_snapshot(cfg: dict) -> dict:
         codex_view["5h"]["source"] = "estimated"
         codex_view["7d"]["source"] = "estimated"
 
-    # Claude exposes the same kind of authoritative usage data through
-    # the claude-hud plugin's cache file. If it's installed and has
-    # written a snapshot, use it; otherwise fall back to summing tokens
-    # from session logs.
-    hud = find_claude_hud_usage(claude_home)
-    if hud is not None:
+    # Three-tier preference for Claude:
+    #   1. OAuth API — freshest, what the HUD plugins themselves use.
+    #   2. claude-hud cache file — same numbers but only refreshed when
+    #      Claude Code renders its status line, so it can sit stale.
+    #   3. Sum tokens from ~/.claude/projects/*.jsonl as a last resort.
+    oauth = fetch_claude_oauth_usage(claude_home)
+    if oauth is not None:
+        # OAuth response doesn't carry the plan name; pull it from the
+        # claude-hud cache if it's there, otherwise leave blank.
+        hud_for_plan = find_claude_hud_usage(claude_home) or {}
+        claude_view = {
+            "5h": _claude_oauth_window(oauth.get("five_hour"), now),
+            "7d": _claude_oauth_window(oauth.get("seven_day"), now),
+            "plan": hud_for_plan.get("planName") or "",
+        }
+    elif (hud := find_claude_hud_usage(claude_home)) is not None:
         claude_view = {
             "5h": _claude_hud_window(hud.get("fiveHour"), hud.get("fiveHourResetAt"), now),
             "7d": _claude_hud_window(hud.get("sevenDay"), hud.get("sevenDayResetAt"), now),

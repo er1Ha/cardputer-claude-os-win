@@ -96,12 +96,14 @@ over local estimation.
   reports a 300-minute and a 10080-minute window with `used_percent`
   and `resets_at`. We take the freshest snapshot across the latest
   rollout files.
-- **Claude Code** — the community `claude-hud` plugin
-  (`jarrodwatts/claude-hud`) writes the server's reported usage to
-  `~/.claude/plugins/claude-hud/.usage-cache.json`. If you have it
-  installed and enabled, we read that file. It refreshes whenever
-  Claude Code renders the status line, so launching Claude Code keeps
-  it warm.
+- **Claude Code** — three-tier preference:
+    1. `https://api.anthropic.com/api/oauth/usage` with Claude Code's
+       own OAuth token from `~/.claude/.credentials.json`. Same source
+       the HUD plugins themselves use; freshest possible reading.
+    2. `~/.claude/plugins/claude-hud/.usage-cache.json` (community
+       `jarrodwatts/claude-hud` plugin's cache). Only updates when
+       Claude Code renders the status line, so it can sit stale.
+    3. Token-sum estimate.
 
 Fallback when neither is available:
 

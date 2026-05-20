@@ -131,12 +131,25 @@ def main() -> int:
             "codex_7d_cap": 350_000,
         }
 
-        # Reset the module-level file cache so a previous test run
-        # doesn't leak state.
+        # Reset module-level caches so a previous test run doesn't
+        # leak state, and short-circuit the OAuth fetch (we don't want
+        # the test to actually hit api.anthropic.com).
         server._FILE_CACHE.clear()
+        server._OAUTH_USAGE_CACHE.update({"ts": 0.0, "data": None})
+        server.fetch_claude_oauth_usage = lambda _home: None
 
         snap = server.build_snapshot(cfg)
         hb = server.heartbeat_payload(snap)
+
+        # Second snapshot with a mock OAuth response, while the tempdir
+        # is still alive (so find_claude_hud_usage can still read the
+        # cache file for plan name).
+        server._OAUTH_USAGE_CACHE.update({"ts": 0.0, "data": None})
+        server.fetch_claude_oauth_usage = lambda _home: {
+            "five_hour":  {"utilization": 78, "resets_at": iso(now + 2 * 3600)},
+            "seven_day":  {"utilization": 55, "resets_at": iso(now + 6 * 86400)},
+        }
+        snap2 = server.build_snapshot(cfg)
 
     failures = []
 
@@ -159,6 +172,13 @@ def main() -> int:
     expect("hb usage_view", hb["usage_view"], "claude")
     expect("hb claude_5h_pct", hb["claude_5h_pct"], 12)
     expect("hb codex_5h_pct",  hb["codex_5h_pct"], 42)
+
+    # OAuth response wins over hud cache for percentages.
+    expect("oauth wins claude 5h pct", snap2["claude"]["5h"]["pct"], 78)
+    expect("oauth wins claude 7d pct", snap2["claude"]["7d"]["pct"], 55)
+    expect("oauth source",             snap2["claude"]["5h"]["source"], "claude_oauth")
+    # Plan still comes from hud since OAuth response doesn't carry it.
+    expect("oauth + hud plan",         snap2["claude"]["plan"], "Pro")
 
     # Claude hud cache sets fiveHourResetAt = now + 3h, so the
     # snapshot's reset_s should land just under 3 * 3600.
