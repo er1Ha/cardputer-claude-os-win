@@ -264,6 +264,56 @@ def find_codex_rate_limits(root: Path) -> dict | None:
     return best
 
 
+# ---- Claude statusLine capture ---------------------------------------
+#
+# claude_statusline_capture.py is wired in via settings.json's
+# `statusLine.command`. Claude Code passes one JSON object on stdin to
+# that command on every status-line render; the capture script saves
+# the official `rate_limits` block to ~/.claude/usage-status.json with
+# shape:
+#
+#   {"captured_at": "<iso>",
+#    "primary":   {"used_percent": N, "window_minutes": 300,
+#                  "resets_in_seconds": N},
+#    "secondary": {"used_percent": N, "window_minutes": 10080,
+#                  "resets_in_seconds": N}}
+#
+# Zero API calls — Claude Code itself gives us the freshest possible
+# numbers as a side effect of rendering its status bar.
+
+
+def find_claude_statusline_usage(claude_home: Path) -> dict | None:
+    path = claude_home / "usage-status.json"
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _claude_statusline_window(side, captured_at_s: float | None, now: float) -> dict:
+    if not isinstance(side, dict):
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "missing"}
+    used = side.get("used_percent")
+    pct = int(round(used)) if isinstance(used, (int, float)) else 0
+    pct = max(0, min(100, pct))
+    raw_reset = side.get("resets_in_seconds")
+    if not isinstance(raw_reset, (int, float)):
+        return {"tokens": pct, "cap": 100, "pct": pct, "reset_s": 0, "source": "claude_statusline"}
+    # The captured number is delta-from-captured-at, so subtract the
+    # elapsed seconds since the file was written.
+    elapsed = (now - captured_at_s) if captured_at_s else 0.0
+    reset_s = int(max(0, raw_reset - elapsed))
+    if reset_s == 0 and raw_reset > 0:
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "rolled_over"}
+    return {"tokens": pct, "cap": 100, "pct": pct, "reset_s": reset_s, "source": "claude_statusline"}
+
+
 # ---- Claude OAuth official usage -------------------------------------
 #
 # api.anthropic.com/api/oauth/usage returns the same numbers the
@@ -350,6 +400,27 @@ def fetch_claude_oauth_usage(claude_home: Path) -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        # 429 is the common case here — Anthropic rate-limits the
+        # endpoint pretty aggressively. Don't drop our last-good data
+        # just because we got rate-limited for a tick; keep returning
+        # the previous reading until either the cooldown lifts or a
+        # newer source (statusLine capture, claude-hud) appears.
+        body = b""
+        try:
+            body = exc.read()
+        except Exception:
+            pass
+        sys.stderr.write(
+            "claude oauth usage fetch failed: HTTP {}: {}\n".format(
+                exc.code, body[:200].decode("utf-8", errors="replace")
+            )
+        )
+        if exc.code == 429 and _OAUTH_USAGE_CACHE["data"] is not None:
+            # Hold the previous response for 5 minutes before retrying.
+            _OAUTH_USAGE_CACHE["ts"] = now - _OAUTH_USAGE_TTL_S + 300
+            return _OAUTH_USAGE_CACHE["data"]
+        return None
     except (urllib.error.URLError, OSError, ValueError) as exc:
         sys.stderr.write("claude oauth usage fetch failed: {}\n".format(exc))
         return None
@@ -505,20 +576,34 @@ def build_snapshot(cfg: dict) -> dict:
         codex_view["5h"]["source"] = "estimated"
         codex_view["7d"]["source"] = "estimated"
 
-    # Three-tier preference for Claude:
-    #   1. OAuth API — freshest, what the HUD plugins themselves use.
-    #   2. claude-hud cache file — same numbers but only refreshed when
-    #      Claude Code renders its status line, so it can sit stale.
-    #   3. Sum tokens from ~/.claude/projects/*.jsonl as a last resort.
-    oauth = fetch_claude_oauth_usage(claude_home)
-    if oauth is not None:
-        # OAuth response doesn't carry the plan name; pull it from the
-        # claude-hud cache if it's there, otherwise leave blank.
-        hud_for_plan = find_claude_hud_usage(claude_home) or {}
+    # Four-tier preference for Claude, in freshness/reliability order:
+    #   1. ~/.claude/usage-status.json — written by the statusLine
+    #      capture hook every time Claude Code renders its status bar.
+    #      Zero API calls, refreshed naturally while you work.
+    #   2. api.anthropic.com/api/oauth/usage — direct call. Same numbers
+    #      the HUD plugins themselves use, but Anthropic rate-limits
+    #      this endpoint, so we cache aggressively.
+    #   3. ~/.claude/plugins/claude-hud/.usage-cache.json — same shape
+    #      as the statusLine file but refreshed less reliably.
+    #   4. Sum tokens from ~/.claude/projects/*.jsonl as a last resort.
+    statusline = find_claude_statusline_usage(claude_home)
+    hud_for_plan = find_claude_hud_usage(claude_home) or {}
+    plan_fallback = hud_for_plan.get("planName") or ""
+    captured_at_s = None
+    if isinstance(statusline, dict):
+        captured_at_s = _parse_iso(statusline.get("captured_at", ""))
+
+    if statusline is not None and (statusline.get("primary") or statusline.get("secondary")):
+        claude_view = {
+            "5h": _claude_statusline_window(statusline.get("primary"), captured_at_s, now),
+            "7d": _claude_statusline_window(statusline.get("secondary"), captured_at_s, now),
+            "plan": plan_fallback,
+        }
+    elif (oauth := fetch_claude_oauth_usage(claude_home)) is not None:
         claude_view = {
             "5h": _claude_oauth_window(oauth.get("five_hour"), now),
             "7d": _claude_oauth_window(oauth.get("seven_day"), now),
-            "plan": hud_for_plan.get("planName") or "",
+            "plan": plan_fallback,
         }
     elif (hud := find_claude_hud_usage(claude_home)) is not None:
         claude_view = {
