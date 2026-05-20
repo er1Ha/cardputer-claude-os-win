@@ -188,13 +188,18 @@ def scan_logs(root: Path) -> list[tuple[float, int]]:
 # into each rollout file as `event_msg` events with payload.type =
 # "token_count". The shape is:
 #
-#     {"payload": {"info": {"rate_limits": {
-#         "primary":   {"used_percent": 1.0,  "window_minutes": 300,
-#                       "resets_at": <epoch_seconds>},
-#         "secondary": {"used_percent": 38.0, "window_minutes": 10080,
-#                       "resets_at": <epoch_seconds>},
-#         "plan_type": "plus", ...
-#     }}}}
+#     {"payload": {
+#         "type": "token_count",
+#         "info": {"total_token_usage": {...}, "last_token_usage": {...},
+#                  "model_context_window": N},
+#         "rate_limits": {
+#             "primary":   {"used_percent": 1.0,  "window_minutes": 300,
+#                           "resets_at": <epoch_seconds>},
+#             "secondary": {"used_percent": 38.0, "window_minutes": 10080,
+#                           "resets_at": <epoch_seconds>},
+#             "plan_type": "plus", ...
+#         },
+#     }}
 #
 # This is the authoritative source — no need to sum tokens or guess a
 # cap. We scan the most recent rollout files newest-first and take the
@@ -223,8 +228,10 @@ def _scan_file_for_rate_limits(path: Path) -> tuple[dict | None, float | None]:
         payload = ev.get("payload") or {}
         if payload.get("type") != "token_count":
             continue
-        info = payload.get("info") or {}
-        rl = info.get("rate_limits")
+        # rate_limits sits directly under `payload`, not under
+        # `payload.info` (info holds total/last token counts and the
+        # model_context_window — a separate concern).
+        rl = payload.get("rate_limits")
         if isinstance(rl, dict):
             return rl, _parse_iso(ev.get("timestamp", ""))
     return None, None

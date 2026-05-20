@@ -41,19 +41,22 @@ def codex_rate_limits_event(ts: float, primary_pct: float, secondary_pct: float,
         "payload": {
             "type": "token_count",
             "info": {
-                "rate_limits": {
-                    "primary": {
-                        "used_percent": primary_pct,
-                        "window_minutes": 300,
-                        "resets_at": primary_reset,
-                    },
-                    "secondary": {
-                        "used_percent": secondary_pct,
-                        "window_minutes": 10080,
-                        "resets_at": secondary_reset,
-                    },
-                    "plan_type": "plus",
+                "total_token_usage": {"total_tokens": 36906},
+                "last_token_usage": {"total_tokens": 36906},
+                "model_context_window": 258400,
+            },
+            "rate_limits": {
+                "primary": {
+                    "used_percent": primary_pct,
+                    "window_minutes": 300,
+                    "resets_at": primary_reset,
                 },
+                "secondary": {
+                    "used_percent": secondary_pct,
+                    "window_minutes": 10080,
+                    "resets_at": secondary_reset,
+                },
+                "plan_type": "plus",
             },
         },
     }
