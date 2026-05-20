@@ -62,11 +62,22 @@ def codex_rate_limits_event(ts: float, primary_pct: float, secondary_pct: float,
     }
 
 
+def write_claude_hud_cache(claude_home: Path, data: dict) -> None:
+    """Write the shape that jarrodwatts/claude-hud caches."""
+    path = claude_home / "plugins" / "claude-hud" / ".usage-cache.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blob = {"data": data, "timestamp": int(time.time() * 1000), "lastGoodData": data}
+    path.write_text(json.dumps(blob), encoding="utf-8")
+
+
 def main() -> int:
     now = time.time()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        claude_dir = root / "claude"
+        # Match the real layout: claude_log_dir = .claude/projects so
+        # the parent gives us .claude/ for the claude-hud cache.
+        claude_home = root / "claude"
+        claude_dir = claude_home / "projects"
         codex_dir = root / "codex"
 
         # Two claude sessions:
@@ -80,6 +91,18 @@ def main() -> int:
             claude_dir / "proj-a" / "session2.jsonl",
             [claude_event(now - 2 * 86400, 20000)],
         )
+
+        # claude-hud cache: Pro plan, 12% 5h / 47% 7d.
+        from datetime import datetime, timezone
+        def iso(t: float) -> str:
+            return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        write_claude_hud_cache(claude_home, {
+            "planName": "Pro",
+            "fiveHour": 12,
+            "sevenDay": 47,
+            "fiveHourResetAt": iso(now + 3 * 3600),
+            "sevenDayResetAt": iso(now + 5 * 86400),
+        })
 
         # One codex rollout file with two rate_limits snapshots; the
         # later one should win.
@@ -121,27 +144,27 @@ def main() -> int:
         if got != want:
             failures.append(f"  {label}: got {got!r}, want {want!r}")
 
-    expect("claude 5h tokens", snap["claude"]["5h"]["tokens"], 5000)
-    expect("claude 7d tokens", snap["claude"]["7d"]["tokens"], 25000)
+    # Claude now comes from claude-hud cache, not summed tokens.
+    expect("claude 5h pct",   snap["claude"]["5h"]["pct"], 12)
+    expect("claude 7d pct",   snap["claude"]["7d"]["pct"], 47)
+    expect("claude 5h source", snap["claude"]["5h"]["source"], "claude_hud")
+    expect("claude plan",     snap["claude"]["plan"], "Pro")
 
-    # Codex now comes from rate_limits, not summed tokens. The newer
-    # snapshot (42% / 38%) should override the older (10% / 20%).
+    # Codex from rate_limits — newer snapshot (42% / 38%) wins over older.
     expect("codex 5h pct",   snap["codex"]["5h"]["pct"], 42)
     expect("codex 7d pct",   snap["codex"]["7d"]["pct"], 38)
     expect("codex 5h source", snap["codex"]["5h"]["source"], "rate_limits")
     expect("codex plan",     snap["codex"]["plan"], "plus")
 
-    # _pct floors: 5000 / 200000 = 2.5 → 2
-    expect("claude 5h pct", snap["claude"]["5h"]["pct"], 2)
-
     expect("hb usage_view", hb["usage_view"], "claude")
-    expect("hb claude_5h_pct", hb["claude_5h_pct"], 2)
+    expect("hb claude_5h_pct", hb["claude_5h_pct"], 12)
     expect("hb codex_5h_pct",  hb["codex_5h_pct"], 42)
 
-    # Reset time: oldest event in 5h window is 30 min old → reset in ~4h30m
+    # Claude hud cache sets fiveHourResetAt = now + 3h, so the
+    # snapshot's reset_s should land just under 3 * 3600.
     reset = snap["claude"]["5h"]["reset_s"]
-    if not (4 * 3600 <= reset <= 5 * 3600):
-        failures.append(f"  claude 5h reset_s: got {reset}, want 4h..5h")
+    if not (3 * 3600 - 60 <= reset <= 3 * 3600):
+        failures.append(f"  claude 5h reset_s: got {reset}, want ~3h")
 
     if failures:
         print("FAIL")

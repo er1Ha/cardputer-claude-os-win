@@ -88,23 +88,33 @@ python host/test_server.py
 
 ## Data source notes
 
-Different sources for the two CLIs:
+Both providers have a way to expose authoritative usage; we prefer it
+over local estimation.
 
-- **Codex CLI** — **official**. Each turn's rollout file contains an
-  `event_msg` event with `payload.info.rate_limits.{primary,secondary}`,
-  which is OpenAI's server-side report (300-minute and 10080-minute
-  windows, percent-used, reset epoch, plan type). We just lift the
-  latest snapshot. No caps to configure, no math to second-guess.
-- **Claude Code** — **estimated**. Anthropic doesn't write rate-limit
-  status back into the log, so we sum each event's
-  `message.usage.{input,output,cache_creation}_tokens` over a rolling
-  window and divide by a local cap. `cache_read_input_tokens` is
-  deliberately **excluded** (cache hits bill at ~0.1x and don't trip
-  the limit; including them inflates the count ~10x).
+- **Codex CLI** — `payload.rate_limits.{primary,secondary}` in each
+  rollout file's `event_msg` / `token_count` events. OpenAI's server
+  reports a 300-minute and a 10080-minute window with `used_percent`
+  and `resets_at`. We take the freshest snapshot across the latest
+  rollout files.
+- **Claude Code** — the community `claude-hud` plugin
+  (`jarrodwatts/claude-hud`) writes the server's reported usage to
+  `~/.claude/plugins/claude-hud/.usage-cache.json`. If you have it
+  installed and enabled, we read that file. It refreshes whenever
+  Claude Code renders the status line, so launching Claude Code keeps
+  it warm.
 
-Each window in the snapshot carries a `source` field — `rate_limits`
-(authoritative), `rolled_over` (Codex window already reset since the
-last snapshot), or `estimated` (Claude / Codex fallback).
+Fallback when neither is available:
+
+- Sum each event's `message.usage.{input,output,cache_creation}_tokens`
+  in `~/.claude/projects/*.jsonl` (or the equivalent Codex jsonl) over
+  a rolling window, divide by a configured cap.
+  `cache_read_input_tokens` is **excluded** (cache hits bill at ~0.1x
+  and don't trip the limit; including them inflates the count ~10x).
+
+Each window in the snapshot carries a `source` field — `claude_hud`,
+`rate_limits` (Codex), `rolled_over` (the reported reset is in the
+past — window has rolled over since the snapshot was written), or
+`estimated` (fallback).
 
 The parsers are defensive: any line missing a recognized usage field
 is skipped. If the upstream log format changes, only the two parsers

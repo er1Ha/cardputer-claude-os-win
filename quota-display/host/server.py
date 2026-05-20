@@ -260,6 +260,52 @@ def find_codex_rate_limits(root: Path) -> dict | None:
     return best
 
 
+# ---- Claude HUD official usage ---------------------------------------
+#
+# The community `claude-hud` plugin (jarrodwatts/claude-hud) caches the
+# server's reported subscription usage at
+#   ~/.claude/plugins/claude-hud/.usage-cache.json
+# with shape:
+#   {"data": {"planName": "Pro",
+#             "fiveHour": <percent>, "sevenDay": <percent>,
+#             "fiveHourResetAt": "<iso>", "sevenDayResetAt": "<iso>"},
+#    "timestamp": <ms_epoch>,
+#    "lastGoodData": {...}}
+# The cache is refreshed whenever Claude Code renders its status line.
+# If `data` is missing (transient fetch failure), `lastGoodData` is the
+# previous known-good snapshot.
+
+
+def find_claude_hud_usage(claude_home: Path) -> dict | None:
+    path = claude_home / "plugins" / "claude-hud" / ".usage-cache.json"
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            blob = json.load(f)
+    except (OSError, ValueError):
+        return None
+    data = blob.get("data") or blob.get("lastGoodData")
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _claude_hud_window(percent, resets_at_iso, now: float) -> dict:
+    if not isinstance(percent, (int, float)):
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "missing"}
+    pct = max(0, min(100, int(round(percent))))
+    resets_at = _parse_iso(resets_at_iso) if isinstance(resets_at_iso, str) else None
+    if resets_at is not None and resets_at < now:
+        # Window rolled over since the cache was written; until claude-hud
+        # refreshes the file, assume 0%.
+        return {"tokens": 0, "cap": 100, "pct": 0, "reset_s": 0, "source": "rolled_over"}
+    reset_s = 0
+    if resets_at is not None:
+        reset_s = max(0, int(resets_at - now))
+    return {"tokens": pct, "cap": 100, "pct": pct, "reset_s": reset_s, "source": "claude_hud"}
+
+
 def _codex_window(window: dict | None, now: float) -> dict:
     """Convert one Codex rate_limits sub-block into the snapshot shape.
 
@@ -322,14 +368,13 @@ def _window(samples, window_s, cap, now):
 def build_snapshot(cfg: dict) -> dict:
     now = time.time()
     codex_root = Path(cfg["codex_log_dir"])
-    with _CACHE_LOCK:
-        claude_samples = scan_logs(Path(cfg["claude_log_dir"]))
+    claude_log_root = Path(cfg["claude_log_dir"])
+    # ~/.claude/projects/... → ~/.claude (where claude-hud caches usage).
+    claude_home = claude_log_root.parent
 
     # Codex CLI writes the server-reported subscription rate limits
     # straight into rollout files, so we just lift them out. Fall back
-    # to local token summing only if no rate_limits block is found —
-    # that path is mostly a no-op since rollout events don't carry
-    # per-turn token totals in a shape we can sum reliably.
+    # to local token summing only if no rate_limits block is found.
     codex_rl = find_codex_rate_limits(codex_root)
     if codex_rl is not None:
         codex_view = {
@@ -348,12 +393,27 @@ def build_snapshot(cfg: dict) -> dict:
         codex_view["5h"]["source"] = "estimated"
         codex_view["7d"]["source"] = "estimated"
 
-    claude_view = {
-        "5h": _window(claude_samples, _FIVE_HOURS_S, cfg["claude_5h_cap"], now),
-        "7d": _window(claude_samples, _SEVEN_DAYS_S, cfg["claude_7d_cap"], now),
-    }
-    claude_view["5h"]["source"] = "estimated"
-    claude_view["7d"]["source"] = "estimated"
+    # Claude exposes the same kind of authoritative usage data through
+    # the claude-hud plugin's cache file. If it's installed and has
+    # written a snapshot, use it; otherwise fall back to summing tokens
+    # from session logs.
+    hud = find_claude_hud_usage(claude_home)
+    if hud is not None:
+        claude_view = {
+            "5h": _claude_hud_window(hud.get("fiveHour"), hud.get("fiveHourResetAt"), now),
+            "7d": _claude_hud_window(hud.get("sevenDay"), hud.get("sevenDayResetAt"), now),
+            "plan": hud.get("planName") or "",
+        }
+    else:
+        with _CACHE_LOCK:
+            claude_samples = scan_logs(claude_log_root)
+        claude_view = {
+            "5h": _window(claude_samples, _FIVE_HOURS_S, cfg["claude_5h_cap"], now),
+            "7d": _window(claude_samples, _SEVEN_DAYS_S, cfg["claude_7d_cap"], now),
+            "plan": "",
+        }
+        claude_view["5h"]["source"] = "estimated"
+        claude_view["7d"]["source"] = "estimated"
 
     return {
         "generated_at": int(now),
@@ -566,10 +626,9 @@ function paint() {
   const w5 = latest[key]["5h"], w7 = latest[key]["7d"];
   const accent = key === "claude" ? "#cc785c" : "#111111";
 
-  document.getElementById("title").textContent = key.toUpperCase();
-  const planText = key === "codex" && latest.codex.plan
-    ? ` ${latest.codex.plan.toUpperCase()}` : "";
-  document.getElementById("title").textContent = key.toUpperCase() + planText;
+  const plan = latest[key].plan || "";
+  document.getElementById("title").textContent =
+    key.toUpperCase() + (plan ? " " + plan.toUpperCase() : "");
 
   document.getElementById("icon").innerHTML =
     renderIcon(key === "claude" ? CLAUDE_ICON : GPT_ICON, accent);
