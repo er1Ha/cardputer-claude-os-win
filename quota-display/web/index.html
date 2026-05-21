@@ -161,6 +161,116 @@
     text-align: left;
     vertical-align: top;
   }
+
+  .chat {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.72);
+    z-index: 10;
+  }
+  .chat.open { display: flex; }
+  .chat-panel {
+    width: min(720px, calc(100vw - 32px));
+    background: #000;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    box-sizing: border-box;
+  }
+  .chat-lcd {
+    background: var(--cream);
+    color: #000;
+    min-height: 300px;
+    padding: 14px;
+    box-sizing: border-box;
+    font: 13px/1.55 var(--pixel);
+    letter-spacing: 0.5px;
+  }
+  .chat-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .chat-title { color: var(--orange); }
+  .chat-close {
+    border: 0;
+    background: #000;
+    color: var(--cream);
+    font: 11px/1 var(--pixel);
+    padding: 5px 8px;
+    cursor: pointer;
+  }
+  .chat-log {
+    height: 176px;
+    overflow: auto;
+    white-space: pre-wrap;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  .chat-settings {
+    display: none;
+    grid-template-columns: 120px 1fr;
+    gap: 7px 8px;
+    margin-bottom: 10px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.08);
+    box-sizing: border-box;
+  }
+  .chat-settings.open { display: grid; }
+  .chat-settings label {
+    align-self: center;
+    color: #333;
+    font: 10px/1 var(--pixel);
+  }
+  .chat-settings input {
+    min-width: 0;
+    border: 1px solid #999;
+    background: #fff;
+    color: #000;
+    padding: 6px;
+    font: 12px/1.2 ui-monospace, monospace;
+  }
+  .chat-settings-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .chat-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .chat-input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid #999;
+    background: #fff;
+    color: #000;
+    padding: 8px;
+    font: 13px/1.2 ui-monospace, monospace;
+  }
+  .chat-send {
+    border: 0;
+    background: var(--orange);
+    color: #000;
+    padding: 8px 12px;
+    font: 11px/1 var(--pixel);
+    cursor: pointer;
+  }
+  .chat-ghost {
+    border: 1px solid #999;
+    background: transparent;
+    color: #000;
+    padding: 7px 10px;
+    font: 10px/1 var(--pixel);
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -241,25 +351,213 @@
   </div>
 
   <div class="meta">
-    240 x 135 — Cardputer LCD (shown @ 3x). Click tab or press &larr; &rarr; to switch.
+    240 x 135 — Cardputer LCD (shown @ 3x). Click tab or press &larr; &rarr; to switch. Press Y for AI chat.
     <span id="status" style="margin-left:12px;color:#aaa;"></span>
+  </div>
+
+  <div class="chat" id="chat">
+    <div class="chat-panel">
+      <div class="chat-lcd">
+        <div class="chat-head">
+          <div class="chat-title">MIMO CHAT</div>
+          <div>
+            <button class="chat-close" id="chatSettingsToggle" type="button">SET</button>
+            <button class="chat-close" id="chatClose" type="button">Q / ESC</button>
+          </div>
+        </div>
+        <div class="chat-settings" id="chatSettings">
+          <label for="chatWorkerBase">Worker relay</label>
+          <input id="chatWorkerBase" spellcheck="false" />
+          <label for="chatDeviceSecret">Device key</label>
+          <input id="chatDeviceSecret" spellcheck="false" />
+          <label for="chatApiBase">Mimo base</label>
+          <input id="chatApiBase" spellcheck="false" />
+          <label for="chatApiKey">Mimo key</label>
+          <input id="chatApiKey" spellcheck="false" />
+          <label for="chatModel">Model</label>
+          <input id="chatModel" spellcheck="false" />
+          <div class="chat-settings-actions">
+            <button class="chat-ghost" id="chatSaveSettings" type="button">SAVE</button>
+            <button class="chat-ghost" id="chatTestSettings" type="button">TEST</button>
+          </div>
+        </div>
+        <div class="chat-log" id="chatLog">Press Y to chat. Enter sends.</div>
+        <form class="chat-form" id="chatForm">
+          <input class="chat-input" id="chatInput" autocomplete="off" placeholder="Ask Mimo..." />
+          <button class="chat-send" type="submit">SEND</button>
+        </form>
+      </div>
+    </div>
   </div>
 
 <script>
   // ---- tab + arrow nav ------------------------------------------------
   const tabs = document.querySelectorAll('.tab');
   const screens = document.querySelectorAll('.screen');
+  const CHAT_DEFAULTS = {
+    workerBase: 'https://push-to-claude.duzi-zy.workers.dev',
+    deviceSecret: '',
+    apiBase: 'https://token-plan-cn.xiaomimimo.com/v1',
+    apiKey: '',
+    model: 'mimo-v2.5-pro',
+  };
+  const CHAT_SETTINGS_KEY = 'quota.chat.settings';
+  const $chat = document.getElementById('chat');
+  const $chatClose = document.getElementById('chatClose');
+  const $chatSettingsToggle = document.getElementById('chatSettingsToggle');
+  const $chatSettings = document.getElementById('chatSettings');
+  const $chatWorkerBase = document.getElementById('chatWorkerBase');
+  const $chatDeviceSecret = document.getElementById('chatDeviceSecret');
+  const $chatApiBase = document.getElementById('chatApiBase');
+  const $chatApiKey = document.getElementById('chatApiKey');
+  const $chatModel = document.getElementById('chatModel');
+  const $chatSaveSettings = document.getElementById('chatSaveSettings');
+  const $chatTestSettings = document.getElementById('chatTestSettings');
+  const $chatLog = document.getElementById('chatLog');
+  const $chatForm = document.getElementById('chatForm');
+  const $chatInput = document.getElementById('chatInput');
   function show(target) {
     tabs.forEach(t => t.classList.toggle('active', t.dataset.target === target));
     screens.forEach(s => s.classList.toggle('active', s.dataset.screen === target));
   }
   tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.target)));
   document.addEventListener('keydown', e => {
+    const isTyping = e.target && ["INPUT", "TEXTAREA"].includes(e.target.tagName);
+    if ($chat.classList.contains('open') && isTyping) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeChat();
+      }
+      return;
+    }
+    if ((e.key === 'y' || e.key === 'Y') && !$chat.classList.contains('open')) {
+      e.preventDefault();
+      openChat();
+      return;
+    }
+    if ((e.key === 'Escape' || e.key === 'q' || e.key === 'Q') && $chat.classList.contains('open')) {
+      e.preventDefault();
+      closeChat();
+      return;
+    }
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'd' || e.key === 'D' || e.key === 'Tab') {
       e.preventDefault(); show('codex');
     }
     if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'a' || e.key === 'A') {
       e.preventDefault(); show('claude');
+    }
+  });
+
+  function openChat() {
+    $chat.classList.add('open');
+    syncSettingsInputs();
+    $chatInput.focus();
+    $chatInput.select();
+  }
+
+  function closeChat() {
+    $chat.classList.remove('open');
+  }
+
+  function appendChat(who, text) {
+    const current = $chatLog.textContent === 'Press Y to chat. Enter sends.' ? '' : $chatLog.textContent + '\n\n';
+    $chatLog.textContent = current + `${who}: ${text}`;
+    $chatLog.scrollTop = $chatLog.scrollHeight;
+  }
+
+  function getChatSettings() {
+    try {
+      return { ...CHAT_DEFAULTS, ...(JSON.parse(localStorage.getItem(CHAT_SETTINGS_KEY) || '{}')) };
+    } catch {
+      return { ...CHAT_DEFAULTS };
+    }
+  }
+
+  function setChatSettings(next) {
+    const current = getChatSettings();
+    const merged = { ...current, ...next };
+    localStorage.setItem(CHAT_SETTINGS_KEY, JSON.stringify(merged));
+    return merged;
+  }
+
+  function syncSettingsInputs() {
+    const s = getChatSettings();
+    $chatWorkerBase.value = s.workerBase || '';
+    $chatDeviceSecret.value = s.deviceSecret || '';
+    $chatApiBase.value = s.apiBase || '';
+    $chatApiKey.value = s.apiKey || '';
+    $chatModel.value = s.model || '';
+  }
+
+  function saveSettingsFromInputs() {
+    let workerBase = $chatWorkerBase.value.trim();
+    let apiBase = $chatApiBase.value.trim();
+    if (workerBase.includes('xiaomimimo.com')) {
+      apiBase = workerBase;
+      workerBase = CHAT_DEFAULTS.workerBase;
+    }
+    return setChatSettings({
+      workerBase,
+      deviceSecret: $chatDeviceSecret.value.trim(),
+      apiBase,
+      apiKey: $chatApiKey.value.trim(),
+      model: $chatModel.value.trim(),
+    });
+  }
+
+  async function callChat(prompt) {
+    const s = getChatSettings();
+    const headers = {
+      'content-type': 'application/json',
+      'x-device-secret': s.deviceSecret,
+    };
+    if (s.apiKey) headers['x-chat-api-key'] = s.apiKey;
+    if (s.apiBase) headers['x-chat-base-url'] = s.apiBase;
+    const r = await fetch((s.workerBase || '').replace(/\/+$/, '') + '/ask-text', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt, model: s.model }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || data.error || `HTTP ${r.status}`);
+    return data.response || '(empty)';
+  }
+
+  $chatClose.addEventListener('click', closeChat);
+  $chatSettingsToggle.addEventListener('click', () => {
+    $chatSettings.classList.toggle('open');
+    syncSettingsInputs();
+  });
+  $chatSaveSettings.addEventListener('click', () => {
+    saveSettingsFromInputs();
+    appendChat('SET', 'saved');
+  });
+  $chatTestSettings.addEventListener('click', async () => {
+    saveSettingsFromInputs();
+    appendChat('SET', 'testing...');
+    try {
+      const text = await callChat('Reply with OK only.');
+      appendChat('AI', text);
+    } catch (err) {
+      appendChat('ERR', err.message);
+    }
+  });
+  $chat.addEventListener('click', e => {
+    if (e.target === $chat) closeChat();
+  });
+  $chatForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const prompt = $chatInput.value.trim();
+    if (!prompt) return;
+    $chatInput.value = '';
+    appendChat('YOU', prompt);
+    appendChat('AI', '...');
+    try {
+      const text = await callChat(prompt);
+      $chatLog.textContent = $chatLog.textContent.replace(/\n\nAI: \.\.\.$/, `\n\nAI: ${text}`);
+      $chatLog.scrollTop = $chatLog.scrollHeight;
+    } catch (err) {
+      $chatLog.textContent = $chatLog.textContent.replace(/\n\nAI: \.\.\.$/, `\n\nAI: ${err.message}. Check SET: Worker relay must be workers.dev, Mimo base is xiaomimimo.com/v1.`);
     }
   });
 

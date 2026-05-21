@@ -80,11 +80,11 @@ async function appendTurn(env, deviceSecret, userMsg, assistantMsg) {
   });
 }
 
-async function callChat(env, deviceSecret, userMessage) {
+async function callChat(env, deviceSecret, userMessage, opts = {}) {
   const history = await getHistory(env, deviceSecret);
-  const model = env.CHAT_MODEL || DEFAULT_CHAT_MODEL;
-  const baseUrl = (env.CHAT_BASE_URL || DEFAULT_CHAT_BASE_URL).replace(/\/+$/, "");
-  const apiKey = env.CHAT_API_KEY;
+  const model = opts.model || env.CHAT_MODEL || DEFAULT_CHAT_MODEL;
+  const baseUrl = (opts.baseUrl || env.CHAT_BASE_URL || DEFAULT_CHAT_BASE_URL).replace(/\/+$/, "");
+  const apiKey = opts.apiKey || env.CHAT_API_KEY;
   if (!apiKey) {
     return { ok: false, status: 500, model, detail: "CHAT_API_KEY is not set" };
   }
@@ -163,7 +163,10 @@ async function handleAsk(request, env) {
   }
 
   const deviceSecret = request.headers.get("x-device-secret");
-  const result = await callChat(env, deviceSecret, transcript);
+  const result = await callChat(env, deviceSecret, transcript, {
+    apiKey: request.headers.get("x-chat-api-key") || "",
+    baseUrl: request.headers.get("x-chat-base-url") || "",
+  });
   if (!result.ok) {
     return jsonResp(
       {
@@ -191,7 +194,11 @@ async function handleAskText(request, env) {
   if (!prompt) return jsonResp({ error: "empty prompt" }, 400);
 
   const deviceSecret = request.headers.get("x-device-secret");
-  const result = await callChat(env, deviceSecret, prompt);
+  const result = await callChat(env, deviceSecret, prompt, {
+    apiKey: request.headers.get("x-chat-api-key") || "",
+    baseUrl: request.headers.get("x-chat-base-url") || "",
+    model: ((data.model || "") + "").trim(),
+  });
   if (!result.ok) {
     return jsonResp(
       {
@@ -249,11 +256,15 @@ export default {
     const url = new URL(request.url);
     const key = `${request.method} ${url.pathname}`;
 
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(
         `push-to-claude relay ok\nchat=${env.CHAT_MODEL || DEFAULT_CHAT_MODEL}\n`,
         {
-        headers: { "content-type": "text/plain" },
+        headers: { "content-type": "text/plain", ...corsHeaders() },
         },
       );
     }
@@ -291,13 +302,22 @@ export default {
       }
     }
 
-    return new Response("not found\n", { status: 404 });
+    return new Response("not found\n", { status: 404, headers: corsHeaders() });
   },
 };
+
+function corsHeaders() {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type, x-device-secret, x-chat-api-key, x-chat-base-url",
+    "access-control-max-age": "86400",
+  };
+}
 
 function jsonResp(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...corsHeaders() },
   });
 }
